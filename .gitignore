@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+build/
+*.egg-info/
+
+# 用户原始资料、解析缓存、向量索引和运行日志不提交到 Git。
+data/inbox/*
+data/processed/*
+data/failed/*
+data/index/*
+!data/inbox/.gitkeep
+!data/processed/.gitkeep
+!data/failed/.gitkeep
+!data/index/.gitkeep

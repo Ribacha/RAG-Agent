@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rag-agent"
+version = "0.2.0"
+description = "A staged, locally testable RAG agent for PDF, Markdown, and TXT files"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "charset-normalizer>=3.3",
+]
+
+[project.optional-dependencies]
+# PyMuPDF handles PDF text extraction and page rendering. It is intentionally
+# optional so Markdown/TXT ingestion remains usable without native extensions.
+pdf = ["PyMuPDF>=1.24"]
+text = ["charset-normalizer>=3.0"]
+# OCR also requires the system Tesseract executable and language data.
+ocr = ["Pillow>=10.0", "pytesseract>=0.3.13"]
+llm = ["openai>=1.0.0", "socksio>=1.0.0"]
+# LangGraph is optional: the hand-written runtime remains available for
+# offline installs and for comparing the graph's behavior with the baseline.
+graph = ["langgraph>=0.2.0"]
+dev = ["pytest>=8.0"]
+all = [
+    "PyMuPDF>=1.24",
+    "charset-normalizer>=3.0",
+    "Pillow>=10.0",
+    "pytesseract>=0.3.13",
+    "openai>=1.0.0",
+    "socksio>=1.0.0",
+    "langgraph>=0.2.0",
+]
+
+[project.scripts]
+rag-agent = "rag_agent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
