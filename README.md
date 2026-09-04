@@ -395,3 +395,33 @@ CLI 发布体验。
 ```
 
 文档内容始终被当作不可信证据。后续 Agent 不应允许模型读取任意文件路径、执行文档中的命令，或让检索文本覆盖系统提示词。
+
+## Git 与下载运行
+
+仓库使用 `main` 作为默认分支。原始资料、Key、`.venv`、缓存、索引和失败日志都由
+`.gitignore` 排除，提交中只保留源码、测试、依赖声明、目录占位文件和技术文档。
+
+下载仓库后，按下面步骤即可运行 CLI（不需要 Web UI）：
+
+```bash
+git clone <repository-url>
+cd rag-agent
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+export PYTHONPATH=src
+python -m rag_agent --help
+```
+
+本地 Git 已初始化并创建提交；远端 URL 和认证不写入代码或文档。首次推送前需要先
+完成 GitHub CLI 登录，再在仓库目录执行：
+
+```bash
+gh auth login -h github.com
+git remote add origin <repository-url>
+git push -u origin main
+```
+
+如果 `origin` 已存在，改用 `git remote set-url origin <repository-url>`。当前开发环境
+的 GitHub token 已失效且尚未配置 `origin`，所以远端创建与推送必须在有效认证后继续；
+不能把本地提交称为已发布。
