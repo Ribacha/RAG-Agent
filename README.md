@@ -382,8 +382,8 @@ rebuild-index                用现有 chunks 重新生成索引
 
 当前版本没有引入 FAISS、Chroma 或 Qdrant；LangGraph 已作为可选编排层接入，默认
 仍使用无依赖的手写 Agent 循环。底层数据、检索结果、对话历史和节点状态均保持可
-观察、可测试，真实 CLI RAG 离线闭环已经验证；后续阶段只继续增强 PDF 版面/OCR 和
-CLI 发布体验。
+观察、可测试，真实 CLI RAG 离线闭环和 GitHub 下载运行路径已经验证；后续阶段只继续
+增强 PDF 版面/OCR 与权限边界。
 
 计划中的后续工作：
 
@@ -395,7 +395,8 @@ CLI 发布体验。
 已推进：中文离线增强 embedding（字符 n-gram + token，免模型下载）
 已完成：LangGraph 状态图基础版（可选依赖，保留手写循环基线）
 已验证：真实 CLI 离线 RAG 闭环（ingest/search/evaluate/ask --dry-run）
-最后：表格/双栏版面、OCR 置信度、CLI 发布验证和权限隔离
+已完成：GitHub 公开仓库发布、全新 clone 后 CLI/test 验证
+最后：表格/双栏版面、OCR 置信度和权限隔离
 ```
 
 文档内容始终被当作不可信证据。后续 Agent 不应允许模型读取任意文件路径、执行文档中的命令，或让检索文本覆盖系统提示词。
@@ -417,8 +418,12 @@ export PYTHONPATH=src
 python -m rag_agent --help
 ```
 
-本地 Git 已初始化并创建提交；远端 URL 和认证不写入代码或文档。首次推送前需要先
-完成 GitHub CLI 登录，再在仓库目录执行：
+仓库已经发布到 GitHub 公开仓库 `Ribacha/RAG-Agent`，默认分支为 `main`。SSH 远端地址
+为 `git@github.com:Ribacha/RAG-Agent.git`，网页地址为
+`https://github.com/Ribacha/RAG-Agent`。远端不包含 API Key、原始资料、虚拟环境、缓存
+或生成索引。
+
+如需把本地 checkout 推送到自己的远端，在仓库目录执行：
 
 ```bash
 gh auth login -h github.com
@@ -426,6 +431,14 @@ git remote add origin <repository-url>
 git push -u origin main
 ```
 
-如果 `origin` 已存在，改用 `git remote set-url origin <repository-url>`。当前开发环境
-的 GitHub token 已失效且尚未配置 `origin`，所以远端创建与推送必须在有效认证后继续；
-不能把本地提交称为已发布。
+如果 `origin` 已存在，改用 `git remote set-url origin <repository-url>`。上面的命令是通用
+发布流程；本项目当前 `origin` 已配置为 `git@github.com:Ribacha/RAG-Agent.git` 并已推送。
+
+### 下载后验证
+
+从公开仓库全新 clone 后，按安装章节创建虚拟环境并执行 `python -m pip install -r
+requirements.txt`。已在干净 clone 中验证：`python -m rag_agent --help` 可启动，完整测试
+为 `59 passed`，并且使用临时 Markdown 知识库运行 `ingest`（1 个文档、106 个 chunk、0
+个失败）、`search` 与 `ask --dry-run` 均成功。`ask --dry-run` 只构造带来源和 `chunk_id`
+的 RAG 证据上下文，不代表外部聊天模型已经生成回答；真实模型调用仍需要用户配置有效
+的 `LLM_API_KEY`。
