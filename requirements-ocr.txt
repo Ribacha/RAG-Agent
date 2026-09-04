@@ -1,1 +1,3 @@
-.[pdf,dev,text,ocr]
+-r requirements.txt
+Pillow>=10.0
+pytesseract>=0.3.13

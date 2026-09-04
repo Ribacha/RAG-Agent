@@ -39,7 +39,8 @@ python -m pip install -r requirements.txt
 export PYTHONPATH=src
 ```
 
-`requirements.txt` 安装 PDF 解析和测试依赖。要使用 DeepSeek/OpenAI 兼容聊天接口，再安装：
+`requirements.txt` 直接列出 PDF 解析和测试依赖，适合从源码 checkout 安装，不会先构建
+本地项目。要使用 DeepSeek/OpenAI 兼容聊天接口，再安装：
 
 ```bash
 python -m pip install -e ".[llm]"
@@ -68,6 +69,9 @@ brew install tesseract tesseract-lang
 tesseract --list-langs       # 应能看到 chi_sim 和 eng
 python -m pip install -r requirements-ocr.txt
 ```
+
+`requirements-ocr.txt` 会复用基础依赖并追加 Pillow、pytesseract；系统仍需安装
+Tesseract 可执行文件和对应语言包。
 
 没有 Tesseract 时，`--ocr` 不会静默产生空文本，而会把 `ocr_unavailable` 写入块和文档清单的 warning。
 
