@@ -9,6 +9,13 @@
 
 项目地址：<https://github.com/Ribacha/RAG-Agent>
 
+## 从底层学习本项目
+
+如果你想理解 RAG 是如何从文件一步步搭建出来的，先阅读
+[`docs/rag-guide/00_RAG学习路线_目录.md`](docs/rag-guide/00_RAG学习路线_目录.md)，再按目录
+依次阅读。教程覆盖资料导入、数据契约、分块、Embedding、向量索引、检索、证据上下文、
+评测、增量更新、安全、Agent 和 LangGraph；不展开 Transformer/LLM 内部原理。
+
 ## 5 分钟配置 DeepSeek
 
 ### 1. 安装
