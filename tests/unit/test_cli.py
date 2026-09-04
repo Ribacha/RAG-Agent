@@ -3,18 +3,38 @@ from __future__ import annotations
 import json
 import contextlib
 import io
+import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from rag_agent.answering.chat import ToolChatTurn
+from rag_agent import cli as cli_module
 from rag_agent.cli import main
 from rag_agent.embeddings import HashEmbeddingProvider
 from rag_agent.retrieval import build_vector_index
 
 
 class CliTests(unittest.TestCase):
+    def test_local_env_is_loaded_without_overriding_shell_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".env").write_text(
+                "RAG_AGENT_TEST_DOTENV=from-file\n"
+                "RAG_AGENT_TEST_DOTENV_ONLY=loaded\n",
+                encoding="utf-8",
+            )
+            with patch.object(cli_module, "PROJECT_ROOT", root), patch.dict(
+                os.environ,
+                {"RAG_AGENT_TEST_DOTENV": "from-shell"},
+                clear=False,
+            ):
+                os.environ.pop("RAG_AGENT_TEST_DOTENV_ONLY", None)
+                cli_module._load_local_env()
+                self.assertEqual(os.environ["RAG_AGENT_TEST_DOTENV"], "from-shell")
+                self.assertEqual(os.environ["RAG_AGENT_TEST_DOTENV_ONLY"], "loaded")
+
     def test_ingest_writes_chunks_manifest_and_failure_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

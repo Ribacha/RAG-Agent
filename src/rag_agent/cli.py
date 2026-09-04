@@ -42,6 +42,24 @@ def _project_root() -> Path:
 
 
 PROJECT_ROOT = _project_root()
+
+
+def _load_local_env() -> None:
+    """Load ``.env`` from the project root without overriding shell values.
+
+    ``python-dotenv`` is intentionally optional at import time: offline CLI
+    commands still work when only explicit shell variables are available.
+    """
+
+    try:
+        from dotenv import load_dotenv
+    except ModuleNotFoundError:
+        return
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
+
+
+_load_local_env()
+
 DEFAULT_CHUNKS = PROJECT_ROOT / "data/index/chunks.jsonl"
 DEFAULT_MANIFEST = PROJECT_ROOT / "data/index/documents.jsonl"
 DEFAULT_FAILURES = PROJECT_ROOT / "data/failed/ingestion.jsonl"
