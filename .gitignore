@@ -5,6 +5,8 @@ __pycache__/
 .env
 build/
 *.egg-info/
+# rag-agent init 生成的工作区标记（含本机元数据），不提交。
+.rag-agent/
 
 # 用户原始资料、解析缓存、向量索引和运行日志不提交到 Git。
 data/inbox/*

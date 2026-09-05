@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rag-agent"
-version = "0.2.0"
+version = "0.3.0"
 description = "A staged, locally testable RAG agent for PDF, Markdown, and TXT files"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -38,6 +38,8 @@ all = [
 
 [project.scripts]
 rag-agent = "rag_agent.cli:main"
+# 短别名，便于像 codex/claude 一样在终端直接输入。
+rag = "rag_agent.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

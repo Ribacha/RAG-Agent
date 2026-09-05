@@ -16,11 +16,41 @@
 依次阅读。教程覆盖资料导入、数据契约、分块、Embedding、向量索引、检索、证据上下文、
 评测、增量更新、安全、Agent 和 LangGraph；不展开 Transformer/LLM 内部原理。
 
+## 安装为命令行工具（推荐）
+
+像 Codex/Claude Code 一样，`rag-agent` 安装后在任意目录可用。工具通过 `.rag-agent/`
+标记定位"工作区"（数据目录 + `.env` 配置都放在工作区内），不依赖仓库检出。
+
+```bash
+git clone git@github.com:Ribacha/RAG-Agent.git
+cd RAG-Agent
+bash scripts/setup.sh          # 一键：建 venv + 安装 .[all] + 生成 .env + 自检
+# 或者手动：
+#   python3 -m venv .venv && source .venv/bin/activate
+#   python -m pip install -e ".[all]"
+```
+
+安装后在任何目录初始化一个知识库工作区并开始使用：
+
+```bash
+rag-agent init ~/my-kb         # 创建 data/ 目录结构，交互式（或 --api-key）生成 .env
+cd ~/my-kb
+rag-agent doctor               # 检查配置、依赖和索引状态
+cp 你的资料.pdf data/inbox/
+rag-agent ingest data/inbox
+rag-agent chat                 # 交互式问答；--retrieval-only 离线检索，--agent 工具调用模式
+```
+
+在仓库检出内开发时，`python -m rag_agent ...` 的用法完全保留；`RAG_AGENT_ROOT`
+环境变量可显式指定工作区（脚本和 CI 场景）。优化路线与任务清单见
+[docs/RAG优化工程文档.md](docs/RAG优化工程文档.md)。
+
 ## 5 分钟配置 DeepSeek
 
 ### 1. 安装
 
-需要 Python 3.11 或更高版本，以及一个 DeepSeek API Key。
+需要 Python 3.11 或更高版本，以及一个 DeepSeek API Key。推荐先执行上一节的
+`bash scripts/setup.sh`；下面的手动步骤与其等价。
 
 ```bash
 git clone git@github.com:Ribacha/RAG-Agent.git
@@ -121,13 +151,17 @@ python -m rag_agent ask "你的问题" --dry-run
 
 | 命令 | 用途 | 是否调用 DeepSeek |
 | --- | --- | --- |
+| `init` | 初始化工作区：创建 data/ 目录并生成 .env | 否 |
+| `doctor` | 检查工作区、配置和可选依赖 | 否 |
 | `ingest` | 抽取资料、分块并建立索引 | 否 |
 | `search` | 只检索 Top-K 证据 | 否 |
 | `ask` | Python 先检索，再让模型回答 | 是（`--dry-run` 除外） |
+| `chat` | 交互式问答会话，支持续问 | 是（`--retrieval-only` / `--dry-run` 除外） |
 | `agent` | 让模型自主决定何时调用受控检索工具 | 是 |
 | `evaluate` | 用 JSONL 标注集评测 Recall@K | 否 |
 | `list-documents` | 查看最近一次导入清单 | 否 |
 | `rebuild-index` | 用已有 chunks 重新建立索引 | 否 |
+| `version` | 打印版本号 | 否 |
 
 第一次使用建议按 `ingest -> search -> ask` 顺序执行。`agent` 是需要模型工具调用能力
 的高级模式，确认普通 `ask` 正常后再使用：
@@ -273,4 +307,5 @@ python -m pip install -e ".[llm]"
 - 本项目没有 Web UI，完整功能通过 CLI 使用。
 - 真实外部模型生成取决于你的 Key、账户和网络；仓库自带测试只验证本地链路。
 
-代码分层、阶段推进记录和设计取舍见 [工程规划.md](工程规划.md)。
+代码分层、阶段推进记录和设计取舍见 [工程规划.md](工程规划.md)；RAG 优化路线与
+可执行任务清单见 [docs/RAG优化工程文档.md](docs/RAG优化工程文档.md)。

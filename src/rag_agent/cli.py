@@ -23,22 +23,21 @@ from .ingest.incremental import incremental_ingest
 from .ingest.pipeline import ingest_path
 from .retrieval.index import LocalVectorIndex, build_vector_index, update_vector_index
 from .storage.jsonl import read_jsonl, write_jsonl_atomic
+from . import __version__
+from .workspace import (
+    find_workspace_root,
+    is_repo_root,
+    is_workspace_root,
+    paths_for,
+    create_workspace,
+    render_env_template,
+)
 
 
 def _project_root() -> Path:
     """找到默认数据目录；可用 RAG_AGENT_ROOT 覆盖。"""
 
-    configured = os.getenv("RAG_AGENT_ROOT")
-    if configured:
-        return Path(configured).expanduser().resolve()
-    current = Path.cwd().resolve()
-    for candidate in (current, *current.parents):
-        if (candidate / "pyproject.toml").exists() and (candidate / "src").is_dir():
-            return candidate
-    source_root = Path(__file__).resolve().parents[2]
-    if (source_root / "pyproject.toml").exists() and (source_root / "src").is_dir():
-        return source_root
-    return current
+    return find_workspace_root()
 
 
 PROJECT_ROOT = _project_root()
@@ -71,7 +70,135 @@ def build_parser() -> argparse.ArgumentParser:
         prog="rag-agent",
         description="分阶段 RAG Agent：导入、检索、离线评测和受控问答。",
     )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
+
+    init = commands.add_parser(
+        "init",
+        help="初始化工作区：创建 data/ 目录结构并生成 .env 配置",
+        description=(
+            "在指定目录创建 rag-agent 工作区（data/inbox、data/index、"
+            "data/failed、data/state 和 .rag-agent/ 标记），并生成 .env。"
+            "初始化后可在该工作区内运行其余命令。"
+        ),
+    )
+    init.add_argument(
+        "path",
+        nargs="?",
+        type=Path,
+        default=None,
+        help="工作区目录（默认当前目录）",
+    )
+    init.add_argument(
+        "--api-key",
+        default=None,
+        help="聊天模型 Key，写入 .env 的 LLM_API_KEY",
+    )
+    init.add_argument("--base-url", default="https://api.deepseek.com")
+    init.add_argument("--model", default="deepseek-chat")
+    init.add_argument(
+        "--embedding-provider",
+        choices=["hash", "chinese", "openai"],
+        default="hash",
+    )
+    init.add_argument(
+        "--force",
+        action="store_true",
+        help="覆盖已存在的 .env（默认保留）",
+    )
+    init.add_argument(
+        "--no-input",
+        action="store_true",
+        help="不进行交互提问，适合脚本和 CI",
+    )
+    init.set_defaults(handler=_handle_init)
+
+    doctor = commands.add_parser(
+        "doctor",
+        help="检查工作区、配置和可选依赖是否就绪",
+    )
+    doctor.add_argument("--json", action="store_true", dest="as_json")
+    doctor.set_defaults(handler=_handle_doctor)
+
+    chat = commands.add_parser(
+        "chat",
+        help="进入交互式问答会话，支持连续追问和会话历史",
+        description=(
+            "交互式命令行会话：每行一个问题，`exit`/`quit` 退出，"
+            "`/reset` 清空历史，`/search 问题` 只检索不回答。"
+            "默认使用单轮 RAG；--agent 切换为工具调用模式，"
+            "--retrieval-only 完全离线。"
+        ),
+    )
+    chat.add_argument(
+        "--index",
+        type=Path,
+        default=DEFAULT_INDEX,
+        help=f"向量索引路径（默认：{DEFAULT_INDEX}）",
+    )
+    _add_embedding_arguments(chat)
+    chat.add_argument("--top-k", type=int, default=5)
+    chat.add_argument(
+        "--min-score",
+        type=float,
+        default=0.08,
+        help="最低余弦相似度；hash 基线可先从 0.08 调整",
+    )
+    chat.add_argument("--max-context-chars", type=int, default=8000)
+    chat.add_argument(
+        "--retrieval-only",
+        action="store_true",
+        help="只检索并展示证据，不调用聊天模型（离线可用）",
+    )
+    chat.add_argument(
+        "--agent",
+        action="store_true",
+        help="使用 agent 工具调用模式回答（默认为单轮 RAG）",
+    )
+    chat.add_argument("--max-steps", type=int, default=5)
+    chat.add_argument(
+        "--history",
+        type=Path,
+        default=None,
+        help="会话历史 JSONL 路径；存在则载入，每轮和退出时更新",
+    )
+    chat.add_argument(
+        "--history-max-turns",
+        type=int,
+        default=20,
+        help="最多保留的问答轮数（默认 20）",
+    )
+    chat.add_argument(
+        "--llm-api-key",
+        "--chat-api-key",
+        dest="llm_api_key",
+        default=None,
+    )
+    chat.add_argument(
+        "--llm-base-url",
+        "--chat-base-url",
+        dest="llm_base_url",
+        default=None,
+    )
+    chat.add_argument(
+        "--llm-model",
+        "--chat-model",
+        dest="llm_model",
+        default=None,
+    )
+    chat.add_argument("--temperature", type=float, default=0.2)
+    chat.add_argument("--max-tokens", type=int, default=1200)
+    chat.set_defaults(handler=_handle_chat)
+
+    version_command = commands.add_parser(
+        "version",
+        help="打印 rag-agent 版本",
+    )
+    version_command.set_defaults(handler=_handle_version)
 
     ingest = commands.add_parser(
         "ingest",
@@ -316,6 +443,297 @@ def _add_embedding_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--embedding-model", default=None)
     parser.add_argument("--embedding-api-key", default=None)
     parser.add_argument("--embedding-base-url", default=None)
+
+
+def _handle_version(_args: argparse.Namespace) -> int:
+    print(f"rag-agent {__version__}")
+    return 0
+
+
+def _handle_init(args: argparse.Namespace) -> int:
+    root = args.path if args.path is not None else Path.cwd()
+    paths = create_workspace(root)
+
+    api_key = args.api_key
+    if api_key is None and not args.no_input and sys.stdin.isatty():
+        # 密钥是敏感输入，用 getpass 隐藏回显；留空表示稍后手动填写。
+        import getpass
+
+        try:
+            api_key = getpass.getpass(
+                "DeepSeek API Key（回车跳过，稍后可编辑 .env）："
+            ).strip() or None
+        except (EOFError, KeyboardInterrupt):
+            print("\n已取消交互输入。")
+            api_key = None
+
+    env_written = False
+    env_existed = paths.env_file.exists()
+    if not env_existed or args.force:
+        paths.env_file.write_text(
+            render_env_template(
+                api_key=api_key,
+                base_url=args.base_url,
+                model=args.model,
+                embedding_provider=args.embedding_provider,
+            ),
+            encoding="utf-8",
+        )
+        env_written = True
+        os.chmod(paths.env_file, 0o600)
+
+    summary = {
+        "workspace_root": str(paths.root),
+        "inbox": str(paths.inbox),
+        "index": str(paths.index),
+        "env_file": str(paths.env_file),
+        "env_written": env_written,
+        "env_kept_existing": env_existed and not args.force,
+        "api_key_configured": bool(api_key),
+    }
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if env_existed and not args.force:
+        print(".env 已存在且未改动；如需重新生成请加 --force。")
+    if not api_key and not _env_has_api_key(paths.env_file):
+        print("尚未配置 LLM_API_KEY：ask/agent/chat 需要它，编辑 .env 或运行 "
+              "rag-agent init --force --api-key sk-... 重新写入。")
+    print("下一步：把资料放入 data/inbox/，然后运行 rag-agent ingest data/inbox。")
+    return 0
+
+
+def _env_has_api_key(env_file: Path) -> bool:
+    if not env_file.exists():
+        return False
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        name, _, value = line.partition("=")
+        if name.strip() == "LLM_API_KEY" and value.strip() and not value.strip().startswith("sk-你的"):
+            return True
+    return False
+
+
+def _handle_doctor(args: argparse.Namespace) -> int:
+    """检查本地环境并输出诊断清单；有 error 项时退出码为 1。"""
+
+    import importlib.util
+    import shutil
+
+    checks: list[dict[str, object]] = []
+
+    def add(name: str, status: str, detail: str) -> None:
+        checks.append({"name": name, "status": status, "detail": detail})
+
+    root = find_workspace_root()
+    paths = paths_for(root)
+    if is_workspace_root(root):
+        add("工作区", "ok", str(root))
+    elif is_repo_root(root):
+        add("工作区", "ok", f"{root}（仓库检出，可用 init 添加 .rag-agent 标记）")
+    else:
+        add("工作区", "warn", f"{root}（未找到工作区标记，运行 rag-agent init 创建）")
+
+    missing_dirs = [
+        str(directory)
+        for directory in (paths.inbox, paths.chunks.parent, paths.failures.parent)
+        if not directory.exists()
+    ]
+    if missing_dirs:
+        add("数据目录", "warn", "缺少：" + "、".join(missing_dirs))
+    else:
+        add("数据目录", "ok", "data/ 目录结构完整")
+
+    if _env_has_api_key(paths.env_file) or os.getenv("LLM_API_KEY"):
+        add("聊天模型 Key", "ok", "已配置 LLM_API_KEY")
+    else:
+        add("聊天模型 Key", "warn", "未配置；ask/agent/chat 需要它，检索类命令可离线运行")
+
+    version_ok = sys.version_info >= (3, 11)
+    add(
+        "Python 版本",
+        "ok" if version_ok else "error",
+        f"{sys.version_info.major}.{sys.version_info.minor}"
+        + ("" if version_ok else "（需要 3.11+）"),
+    )
+
+    optional_modules = [
+        ("dotenv", "python-dotenv（.env 读取）", "error"),
+        ("fitz", "PyMuPDF（PDF 抽取）", "warn"),
+        ("openai", "OpenAI SDK（ask/agent/chat）", "warn"),
+        ("pytesseract", "pytesseract（OCR）", "warn"),
+        ("langgraph", "LangGraph（agent --graph）", "warn"),
+    ]
+    for module_name, label, missing_status in optional_modules:
+        found = importlib.util.find_spec(module_name) is not None
+        add(
+            f"依赖 {module_name}",
+            "ok" if found else missing_status,
+            label + ("" if found else "：未安装，相关功能不可用"),
+        )
+    tesseract = shutil.which("tesseract")
+    add(
+        "Tesseract 可执行文件",
+        "ok" if tesseract else "warn",
+        tesseract or "未找到；OCR 需要 brew install tesseract tesseract-lang",
+    )
+
+    summary = _index_meta_summary(paths.index)
+    if summary is None:
+        add("向量索引", "warn", f"{paths.index} 不存在，先运行 rag-agent ingest")
+    elif "error" in summary:
+        add("向量索引", "error", str(summary["error"]))
+    else:
+        add(
+            "向量索引",
+            "ok",
+            f"chunks={summary['chunk_count']}，维度={summary['dimension']}，"
+            f"provider={summary['provider']}",
+        )
+
+    has_error = any(check["status"] == "error" for check in checks)
+    if args.as_json:
+        print(json.dumps({"workspace_root": str(root), "checks": checks}, ensure_ascii=False, indent=2))
+    else:
+        icons = {"ok": "✅", "warn": "⚠️ ", "error": "❌"}
+        for check in checks:
+            print(f"{icons[check['status']]} {check['name']}：{check['detail']}")
+        print("\n结论：" + ("存在错误项，请先修复。" if has_error else "本地环境可用。"))
+    return 1 if has_error else 0
+
+
+def _index_meta_summary(index_path: Path) -> dict[str, object] | None:
+    """只读索引首行 meta，避免为诊断加载整个索引。"""
+
+    if not index_path.exists():
+        return None
+    try:
+        with index_path.open("r", encoding="utf-8") as handle:
+            meta = json.loads(handle.readline())
+    except (OSError, json.JSONDecodeError):
+        return {"error": f"索引文件无法读取：{index_path}"}
+    if meta.get("_type") != "meta":
+        return {"error": "索引首行不是 meta，可能不是本项目生成的索引"}
+    return {
+        "chunk_count": meta.get("chunk_count"),
+        "dimension": meta.get("dimension"),
+        "provider": meta.get("provider_fingerprint"),
+    }
+
+
+def _handle_chat(args: argparse.Namespace) -> int:
+    index = LocalVectorIndex.load(_resolve_path(args.index))
+    embedding_provider = create_embedding_provider(
+        args.embedding_provider,
+        dimension=args.embedding_dimension or index.dimension,
+        model=args.embedding_model,
+        api_key=args.embedding_api_key,
+        base_url=args.embedding_base_url,
+    )
+
+    history = ConversationHistory(max_turns=args.history_max_turns)
+    history_path = _resolve_path(args.history) if args.history is not None else None
+    if history_path is not None and history_path.exists():
+        history = ConversationHistory.load(history_path, max_turns=args.history_max_turns)
+
+    chat_provider = None
+    if not args.retrieval_only:
+        chat_provider = OpenAICompatibleChatProvider.from_environment(
+            api_key=args.llm_api_key,
+            base_url=args.llm_base_url,
+            model=args.llm_model,
+            temperature=args.temperature,
+            max_tokens=args.max_tokens,
+        )
+    agent = None
+    if args.agent and chat_provider is not None:
+        agent = KnowledgeAgent(
+            KnowledgeSearchTool(index, embedding_provider),
+            chat_provider,
+            max_steps=args.max_steps,
+        )
+    answerer = None
+    if chat_provider is not None and not args.agent:
+        answerer = RagAnswerer(
+            index,
+            embedding_provider=embedding_provider,
+            chat_provider=chat_provider,
+            min_score=args.min_score,
+            max_context_chars=args.max_context_chars,
+            top_k=args.top_k,
+        )
+
+    mode = (
+        "离线检索（--retrieval-only）"
+        if args.retrieval_only
+        else ("agent 工具调用" if args.agent else "单轮 RAG")
+    )
+    print(f"rag-agent chat（{mode}）| 索引 {index.size} 条 | 输入 exit 退出，/help 查看命令。")
+    while True:
+        try:
+            line = input("你> ").strip()
+        except EOFError:
+            print()
+            break
+        except KeyboardInterrupt:
+            print()
+            break
+        if not line:
+            continue
+        lowered = line.lower()
+        if lowered in {"exit", "quit", ":q", "退出"}:
+            break
+        if lowered in {"help", "/help"}:
+            print("exit / quit：退出会话；/reset：清空会话历史；/search 问题：只检索证据。")
+            continue
+        if lowered == "/reset":
+            history = ConversationHistory(max_turns=args.history_max_turns)
+            print("已清空会话历史。")
+            continue
+        if lowered.startswith("/search"):
+            query = line[len("/search"):].strip()
+            if not query:
+                print("用法：/search 你的问题")
+                continue
+            _print_search_results(
+                index.search(
+                    query,
+                    provider=embedding_provider,
+                    top_k=args.top_k,
+                    min_score=args.min_score,
+                )
+            )
+            continue
+        if lowered.startswith("/"):
+            print(f"未知命令：{line}；输入 /help 查看可用命令。")
+            continue
+
+        try:
+            if args.retrieval_only:
+                _print_search_results(
+                    index.search(
+                        line,
+                        provider=embedding_provider,
+                        top_k=args.top_k,
+                        min_score=args.min_score,
+                    )
+                )
+            elif agent is not None:
+                result = agent.run(line, history=history)
+                history = result.history
+                print(result.answer)
+                if result.evidence:
+                    print(f"\nAgent 检索到 {len(result.evidence)} 条证据。")
+            else:
+                assert answerer is not None
+                result = answerer.answer(line)
+                _print_answer(result)
+        except KeyboardInterrupt:
+            print("\n本轮已取消（再次 Ctrl+C 或输入 exit 退出会话）。")
+            continue
+        if history_path is not None:
+            history.save(history_path)
+    if history_path is not None:
+        history.save(history_path)
+        print(f"会话历史已写入：{history_path}")
+    return 0
 
 
 def _handle_ingest(args: argparse.Namespace) -> int:
