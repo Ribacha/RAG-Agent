@@ -87,6 +87,10 @@ def _clean_soup(soup) -> None:
 
     for node in soup.find_all(_NOISE_TAGS):
         node.decompose()
+    # Sphinx 系文档（Python/很多官方文档）在标题里放 "¶" 锚点链接，
+    # 属于纯标记噪声。
+    for node in soup.find_all(class_="headerlink"):
+        node.decompose()
     for node in soup.find_all(attrs={"role": lambda value: value in _NOISE_ROLES}):
         node.decompose()
     for node in soup.find_all(attrs={"aria-hidden": "true"}):
@@ -167,7 +171,7 @@ def extract_blocks(html: str) -> tuple[list[tuple[str, tuple[str, ...]]], list[s
                 continue
             if name in _HEADING_TAGS:
                 level = _HEADING_TAGS[name]
-                text = _collapse(child.get_text(" ", strip=True))
+                text = _collapse(child.get_text(" ", strip=True)).rstrip("¶").rstrip()
                 if text:
                     # 栈的第 0 位是页面标题（固定根），所以弹出位置是 level
                     # 而不是 level-1：h1 挂在标题之下，h2 挂在 h1 之下。
@@ -269,17 +273,22 @@ def build_web_document(page: FetchResult) -> DocumentRecord:
 def extract_links(html: str, base_url: str) -> list[str]:
     """抽取页面里的站内链接（绝对化、去 fragment、保序去重）。
 
-    供爬虫决定下一步抓什么；只返回 http/https 链接。
+    供爬虫决定下一步抓什么；只返回 http/https 链接。发现链接前先做与
+    正文抽取相同的去噪：导航/页脚里的工具链接（索引页、bug 页等）不该
+    进入抓取范围。
     """
 
     BeautifulSoup = _require_bs4()
     soup = BeautifulSoup(html, "html.parser")
+    _clean_soup(soup)
 
     seen: set[str] = set()
     ordered: list[str] = []
     for anchor in soup.find_all("a", href=True):
         href = (anchor.get("href") or "").strip()
         if not href or href.startswith(("mailto:", "javascript:", "tel:", "#")):
+            continue
+        if anchor.find_parent(_NOISE_TAGS) is not None:
             continue
         try:
             absolute = normalize_url(urllib.parse.urljoin(base_url, href))

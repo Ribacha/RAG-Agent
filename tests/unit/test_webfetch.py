@@ -97,6 +97,8 @@ class ExtractTests(unittest.TestCase):
         <a href="b.html#frag">B</a>
         <a href="mailto:a@b.c">Mail</a>
         <a href="https://ext.example.com/c">C</a>
+        <nav><a href="/nav-tool.html">导航里的工具链接</a></nav>
+        <footer><a href="/footer-tool.html">页脚链接</a></footer>
         """
         links = extract_links(html, "https://test.local/index.html")
         self.assertEqual(
@@ -107,6 +109,17 @@ class ExtractTests(unittest.TestCase):
                 "https://ext.example.com/c",
             ],
         )
+
+    def test_heading_strips_anchor_marks(self) -> None:
+        from rag_agent.webfetch.extract import extract_blocks
+
+        html = "<html><head><title>T</title></head><body><main>" \
+               "<h2>流量控制<span class=\"headerlink\">¶</span></h2>" \
+               "<p>内容。</p></main></body></html>"
+        blocks, _warnings, _title = extract_blocks(html)
+        headings = {path[-1] for _, path in blocks if path}
+        self.assertIn("流量控制", headings)
+        self.assertNotIn("流量控制 ¶", headings)
 
     def test_build_web_document_uses_url_as_source(self) -> None:
         from rag_agent.webfetch.extract import build_web_document
