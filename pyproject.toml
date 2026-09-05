@@ -21,6 +21,8 @@ text = ["charset-normalizer>=3.0"]
 # OCR also requires the system Tesseract executable and language data.
 ocr = ["Pillow>=10.0", "pytesseract>=0.3.13"]
 llm = ["openai>=1.0.0", "socksio>=1.0.0"]
+# 网页抓取（ingest-url）。BeautifulSoup 用标准库 html.parser，无需额外编译。
+web = ["beautifulsoup4>=4.12"]
 # LangGraph is optional: the hand-written runtime remains available for
 # offline installs and for comparing the graph's behavior with the baseline.
 graph = ["langgraph>=0.2.0"]
@@ -33,6 +35,7 @@ all = [
     "pytesseract>=0.3.13",
     "openai>=1.0.0",
     "socksio>=1.0.0",
+    "beautifulsoup4>=4.12",
     "langgraph>=0.2.0",
 ]
 

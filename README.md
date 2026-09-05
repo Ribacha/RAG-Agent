@@ -157,6 +157,7 @@ python -m rag_agent ask "你的问题" --dry-run
 | `init` | 初始化工作区：创建 data/ 目录并生成 .env | 否 |
 | `doctor` | 检查工作区、配置和可选依赖 | 否 |
 | `ingest` | 抽取资料、分块并建立索引 | 否 |
+| `ingest-url` | 爬取网站文字内容，清洗整理后导入索引 | 否 |
 | `search` | 只检索 Top-K 证据 | 否 |
 | `ask` | Python 先检索，再让模型回答 | 是（`--dry-run` 除外） |
 | `chat` | 交互式问答会话，支持续问 | 是（`--retrieval-only` / `--dry-run` 除外） |
@@ -172,6 +173,25 @@ python -m rag_agent ask "你的问题" --dry-run
 ```bash
 python -m rag_agent agent "Transformer 的注意力如何计算" --json
 ```
+
+## 抓取网站内容
+
+除了本地文件，还可以直接把一个网站的文字内容导入知识库（需要 `pip install -e ".[web]"`
+安装 BeautifulSoup）：
+
+```bash
+# 抓入口页 + 直接链接（默认同域、遵守 robots.txt、请求间隔 1 秒、最多 10 页）
+rag-agent ingest-url https://docs.example.com/tutorial
+
+# 爬得更深更多；重复执行时内容未变的页面自动复用旧向量
+rag-agent ingest-url https://docs.example.com/tutorial --max-pages 50 --max-depth 2
+
+# 之后照常检索和提问，引用会显示来源 URL
+rag-agent ask "这份教程怎么配置超时？"
+```
+
+只做静态抓取（JavaScript 渲染的站点抓不到）；设计思路与函数讲解见
+[docs/网页爬取功能文档.md](docs/网页爬取功能文档.md)。
 
 ## 配置参考
 

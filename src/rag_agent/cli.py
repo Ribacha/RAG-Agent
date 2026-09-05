@@ -23,6 +23,12 @@ from .ingest.incremental import incremental_ingest
 from .ingest.pipeline import ingest_path
 from .retrieval.index import LocalVectorIndex, build_vector_index, update_vector_index
 from .storage.jsonl import read_jsonl, write_jsonl_atomic
+from .webfetch import (
+    CrawlConfig,
+    build_web_document,
+    crawl_site,
+    merge_web_documents,
+)
 from . import __version__
 from .workspace import (
     find_workspace_root,
@@ -259,6 +265,53 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest.set_defaults(handler=_handle_ingest)
 
+    ingest_url = commands.add_parser(
+        "ingest-url",
+        help="爬取一个网站的文字内容，清洗整理后导入知识库索引",
+        description=(
+            "从入口 URL 出发抓取网页（默认同域、尊重 robots.txt、请求间隔 1 秒），"
+            "抽取正文并按标题层级整理成知识块，合并进现有索引。已导入且内容未变"
+            "的页面会复用旧向量，重复执行只对新增或变化的页面消耗 embedding。"
+        ),
+    )
+    ingest_url.add_argument("url", help="入口 URL（http/https）")
+    ingest_url.add_argument(
+        "--output", type=Path, default=DEFAULT_CHUNKS, help=f"chunks 输出路径（默认：{DEFAULT_CHUNKS}）"
+    )
+    ingest_url.add_argument(
+        "--manifest", type=Path, default=DEFAULT_MANIFEST, help=f"文档清单路径（默认：{DEFAULT_MANIFEST}）"
+    )
+    ingest_url.add_argument(
+        "--failures", type=Path, default=DEFAULT_FAILURES, help=f"失败清单路径（默认：{DEFAULT_FAILURES}）"
+    )
+    ingest_url.add_argument(
+        "--index", type=Path, default=DEFAULT_INDEX, help=f"向量索引路径（默认：{DEFAULT_INDEX}）"
+    )
+    _add_embedding_arguments(ingest_url)
+    ingest_url.add_argument("--max-pages", type=int, default=10, help="最多抓取的页面数（默认 10）")
+    ingest_url.add_argument(
+        "--max-depth", type=int, default=1, help="从入口页面算起的最大链接深度（默认 1）"
+    )
+    ingest_url.add_argument(
+        "--delay", type=float, default=1.0, help="相邻请求的间隔秒数（默认 1.0，礼貌抓取）"
+    )
+    ingest_url.add_argument(
+        "--cross-domain", action="store_true", help="允许跟随跨域链接（默认只抓同域）"
+    )
+    ingest_url.add_argument(
+        "--no-robots", action="store_true", help="忽略 robots.txt（仅用于抓取你自己控制的站点）"
+    )
+    ingest_url.add_argument("--timeout", type=float, default=15.0, help="单页请求超时秒数")
+    ingest_url.add_argument(
+        "--max-page-mb", type=float, default=5, help="单页大小上限（MiB，默认 5）"
+    )
+    ingest_url.add_argument("--max-chars", type=int, default=1200)
+    ingest_url.add_argument("--overlap-chars", type=int, default=120)
+    ingest_url.add_argument(
+        "--no-index", action="store_true", help="只写 chunks 和清单，不更新向量索引"
+    )
+    ingest_url.set_defaults(handler=_handle_ingest_url)
+
     search = commands.add_parser(
         "search",
         help="在已有索引中检索最相关的知识片段",
@@ -273,7 +326,7 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--top-k", type=int, default=5)
     search.add_argument("--min-score", type=float, default=0.0)
     search.add_argument("--source", type=str, default=None, help="只搜索指定来源路径")
-    search.add_argument("--file-type", type=str, choices=["txt", "markdown", "pdf"])
+    search.add_argument("--file-type", type=str, choices=["txt", "markdown", "pdf", "html"])
     search.add_argument("--json", action="store_true", dest="as_json")
     _add_embedding_arguments(search)
     search.set_defaults(handler=_handle_search)
@@ -558,6 +611,7 @@ def _handle_doctor(args: argparse.Namespace) -> int:
         ("dotenv", "python-dotenv（.env 读取）", "error"),
         ("fitz", "PyMuPDF（PDF 抽取）", "warn"),
         ("openai", "OpenAI SDK（ask/agent/chat）", "warn"),
+        ("bs4", "BeautifulSoup（网页抓取 ingest-url）", "warn"),
         ("pytesseract", "pytesseract（OCR）", "warn"),
         ("langgraph", "LangGraph（agent --graph）", "warn"),
     ]
@@ -734,6 +788,92 @@ def _handle_chat(args: argparse.Namespace) -> int:
         history.save(history_path)
         print(f"会话历史已写入：{history_path}")
     return 0
+
+
+def _handle_ingest_url(args: argparse.Namespace) -> int:
+    crawl_config = CrawlConfig(
+        max_pages=args.max_pages,
+        max_depth=args.max_depth,
+        delay_seconds=args.delay,
+        respect_robots=not args.no_robots,
+        same_domain=not args.cross_domain,
+        timeout=args.timeout,
+        max_page_bytes=max(1, int(args.max_page_mb * 1024 * 1024)),
+    )
+    chunk_config = ChunkConfig(max_chars=args.max_chars, overlap_chars=args.overlap_chars)
+    output_path = _resolve_path(args.output)
+    manifest_path = _resolve_path(args.manifest)
+    failures_path = _resolve_path(args.failures)
+    index_path = _resolve_path(args.index)
+
+    print(
+        f"开始抓取 {args.url}（最多 {args.max_pages} 页，深度 {args.max_depth}，"
+        f"{'同域' if not args.cross_domain else '允许跨域'}，"
+        f"{'尊重 robots.txt' if not args.no_robots else '忽略 robots.txt'}）…"
+    )
+    crawl = crawl_site(args.url, crawl_config)
+
+    records = []
+    failures: list[dict[str, str]] = []
+    for failure in crawl.failures:
+        failures.append(
+            {"source_path": failure.url, "error_type": failure.error_type, "message": failure.message}
+        )
+    for page in crawl.pages:
+        try:
+            records.append(build_web_document(page.result))
+        except Exception as error:  # 单页整理失败不影响其他页面
+            failures.append(
+                {
+                    "source_path": page.url,
+                    "error_type": type(error).__name__,
+                    "message": str(error),
+                }
+            )
+
+    merge = merge_web_documents(        records,
+        _read_optional_jsonl(output_path),
+        _read_optional_jsonl(manifest_path),
+        chunk_config=chunk_config,
+    )
+
+    write_jsonl_atomic(output_path, merge.chunks)
+    write_jsonl_atomic(manifest_path, merge.manifests)
+    write_jsonl_atomic(failures_path, failures)
+
+    index_provider = None
+    index_stats = None
+    if not args.no_index:
+        index_provider = create_embedding_provider(
+            args.embedding_provider,
+            dimension=args.embedding_dimension,
+            model=args.embedding_model,
+            api_key=args.embedding_api_key,
+            base_url=args.embedding_base_url,
+        )
+        _, index_stats = update_vector_index(
+            merge.chunks,
+            provider=index_provider,
+            path=index_path,
+        )
+
+    summary = {
+        "pages_crawled": len(crawl.pages),
+        "pages_added": merge.counts.added,
+        "pages_updated": merge.counts.updated,
+        "pages_unchanged": merge.counts.unchanged,
+        "pages_failed": len(failures),
+        "chunks_written": len(merge.chunks),
+        "chunks_path": str(output_path),
+        "manifest_path": str(manifest_path),
+        "failures_path": str(failures_path),
+        "index_path": None if args.no_index else str(index_path),
+        "embedding_provider": index_provider.fingerprint if index_provider else None,
+        "vectors_reused": index_stats.reused_vectors if index_stats else None,
+        "vectors_embedded": index_stats.embedded_vectors if index_stats else None,
+    }
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 2 if failures else 0
 
 
 def _handle_ingest(args: argparse.Namespace) -> int:
