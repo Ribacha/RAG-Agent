@@ -186,12 +186,15 @@ rag-agent ingest-url https://docs.example.com/tutorial
 # 爬得更深更多；重复执行时内容未变的页面自动复用旧向量
 rag-agent ingest-url https://docs.example.com/tutorial --max-pages 50 --max-depth 2
 
+# 动态渲染站点（内容由 JS 生成的页面；浏览器体积大，按需安装）
+python -m pip install -e ".[web-js]" && python -m playwright install chromium   # 一次性
+rag-agent ingest-url https://spa.example.com --render-js
+
 # 之后照常检索和提问，引用会显示来源 URL
 rag-agent ask "这份教程怎么配置超时？"
 ```
 
-只做静态抓取（JavaScript 渲染的站点抓不到）；设计思路与函数讲解见
-[docs/网页爬取功能文档.md](docs/网页爬取功能文档.md)。
+设计思路与函数讲解见 [docs/网页爬取功能文档.md](docs/网页爬取功能文档.md)。
 
 ## 配置参考
 

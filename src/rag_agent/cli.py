@@ -26,6 +26,7 @@ from .storage.jsonl import read_jsonl, write_jsonl_atomic
 from .webfetch import (
     CrawlConfig,
     build_web_document,
+    create_render_fetcher,
     crawl_site,
     merge_web_documents,
 )
@@ -300,6 +301,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest_url.add_argument(
         "--no-robots", action="store_true", help="忽略 robots.txt（仅用于抓取你自己控制的站点）"
+    )
+    ingest_url.add_argument(
+        "--render-js",
+        action="store_true",
+        help="用无头浏览器渲染页面后再抽取（用于 JS 动态站点；"
+        "需要先安装 python -m pip install -e \".[web-js]\" 并执行 "
+        "python -m playwright install chromium）",
     )
     ingest_url.add_argument("--timeout", type=float, default=15.0, help="单页请求超时秒数")
     ingest_url.add_argument(
@@ -612,6 +620,7 @@ def _handle_doctor(args: argparse.Namespace) -> int:
         ("fitz", "PyMuPDF（PDF 抽取）", "warn"),
         ("openai", "OpenAI SDK（ask/agent/chat）", "warn"),
         ("bs4", "BeautifulSoup（网页抓取 ingest-url）", "warn"),
+        ("playwright", "Playwright（ingest-url --render-js 动态渲染）", "warn"),
         ("pytesseract", "pytesseract（OCR）", "warn"),
         ("langgraph", "LangGraph（agent --graph）", "warn"),
     ]
@@ -809,9 +818,17 @@ def _handle_ingest_url(args: argparse.Namespace) -> int:
     print(
         f"开始抓取 {args.url}（最多 {args.max_pages} 页，深度 {args.max_depth}，"
         f"{'同域' if not args.cross_domain else '允许跨域'}，"
-        f"{'尊重 robots.txt' if not args.no_robots else '忽略 robots.txt'}）…"
+        f"{'尊重 robots.txt' if not args.no_robots else '忽略 robots.txt'}"
+        f"{'，JS 渲染' if args.render_js else ''}）…"
     )
-    crawl = crawl_site(args.url, crawl_config)
+    fetcher = None
+    if args.render_js:
+        # 显式构造：Playwright 缺失或浏览器未安装在这里就会报错，而不是爬到一半。
+        fetcher = create_render_fetcher(timeout_ms=int(args.timeout * 1000))
+        crawl = crawl_site(args.url, crawl_config, fetcher=fetcher)
+        fetcher.close()
+    else:
+        crawl = crawl_site(args.url, crawl_config)
 
     records = []
     failures: list[dict[str, str]] = []

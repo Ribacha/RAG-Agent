@@ -20,6 +20,7 @@ from .crawler import (
 )
 from .extract import extract_links, build_web_document
 from .ingest_url import merge_web_documents
+from .render import RenderFetcher, create_render_fetcher
 
 __all__ = [
     "FetchResult",
@@ -35,4 +36,6 @@ __all__ = [
     "extract_links",
     "build_web_document",
     "merge_web_documents",
+    "RenderFetcher",
+    "create_render_fetcher",
 ]

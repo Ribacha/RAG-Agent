@@ -90,6 +90,24 @@ class ExtractTests(unittest.TestCase):
         self.assertEqual(path, ("测试站点", "计算机网络讲义", "流量控制"))
         self.assertEqual(warnings, [])
 
+    def test_span_wrapped_content_is_extracted(self) -> None:
+        """JS 渲染站点常把正文放在 div/span 而非 <p>；不能丢内容。"""
+        from rag_agent.webfetch.extract import extract_blocks
+
+        html = (
+            "<html><head><title>名言</title></head><body><main>"
+            '<div class="quote"><span class="text">天行健，君子以自强不息。</span>'
+            "<span>作者：佚名</span></div>"
+            "</main></body></html>"
+        )
+        blocks, _warnings, _title = extract_blocks(html)
+        texts = [text for text, _ in blocks]
+        joined = " ".join(texts)
+        self.assertIn("天行健，君子以自强不息。", joined)
+        self.assertIn("作者：佚名", joined)
+        # 设计意图：没有结构子元素的容器整体成为一个语义块（名言+作者同块）
+        self.assertTrue(any("天行健" in text and "作者：佚名" in text for text in texts))
+
     def test_extract_links_absolute_and_deduplicated(self) -> None:
         html = """
         <a href="/a.html">A</a>
@@ -231,6 +249,66 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(third.counts.added, 1)
         kept = {chunk["source_path"] for chunk in third.chunks}
         self.assertIn("https://test.local/", kept)
+
+
+class RenderFetcherTests(unittest.TestCase):
+    """RenderFetcher 逻辑全部离线：静态结果用假 fetcher，渲染用假 page_renderer。"""
+
+    def _fetcher(self, site, rendered):
+        from rag_agent.webfetch.render import RenderFetcher
+
+        static_calls: list[str] = []
+        render_calls: list[str] = []
+
+        def static_fetcher(url, **kwargs):
+            static_calls.append(url)
+            if url not in site:
+                from rag_agent.webfetch import WebFetchError
+
+                raise WebFetchError(f"抓取失败 {url}：HTTPError: HTTP Error 404")
+            content_type, body = site[url]
+            return fake_result(url, body, content_type)
+
+        def page_renderer(url, *, timeout_ms, user_agent):
+            render_calls.append(url)
+            return url, rendered.get(url, "<html><body><p>渲染后的内容</p></body></html>")
+
+        fetcher = RenderFetcher(page_renderer=page_renderer, static_fetcher=static_fetcher)
+        return fetcher, static_calls, render_calls
+
+    def test_html_pages_are_rendered_and_plain_resources_pass_through(self) -> None:
+        site = {
+            "https://test.local/robots.txt": ("text/plain", "User-agent: *\nAllow: /\n"),
+            "https://test.local/page": ("text/html", "<html><body>静态壳子</body></html>"),
+        }
+        fetcher, static_calls, render_calls = self._fetcher(
+            site, {"https://test.local/page": "<html><body><p>JS 渲染后的内容</p></body></html>"}
+        )
+        robots = fetcher("https://test.local/robots.txt")
+        self.assertIn("Allow: /", robots.text)  # 非 HTML 直接走静态，不进浏览器
+        page = fetcher("https://test.local/page")
+        self.assertIn("JS 渲染后的内容", page.text)  # HTML 用渲染结果替换静态壳子
+        self.assertEqual(page.content_type, "text/html")
+        self.assertEqual(render_calls, ["https://test.local/page"])
+
+    def test_static_404_fails_before_rendering(self) -> None:
+        site: dict = {}
+        fetcher, _static_calls, render_calls = self._fetcher(site, {})
+        from rag_agent.webfetch import WebFetchError
+
+        with self.assertRaises(WebFetchError):
+            fetcher("https://test.local/missing")
+        self.assertEqual(render_calls, [])  # 错误在静态层暴露，浏览器没被消耗
+
+    def test_rendered_page_respects_max_bytes(self) -> None:
+        site = {"https://test.local/page": ("text/html", "<html><body>壳</body></html>")}
+        fetcher, _static_calls, _render_calls = self._fetcher(
+            site, {"https://test.local/page": "<html><body>" + "x" * 100 + "</body></html>"}
+        )
+        from rag_agent.webfetch import WebFetchError
+
+        with self.assertRaises(WebFetchError):
+            fetcher("https://test.local/page", max_bytes=10)
 
 
 class IngestUrlCliTests(unittest.TestCase):

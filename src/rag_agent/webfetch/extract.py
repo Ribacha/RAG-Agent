@@ -112,6 +112,10 @@ def _pick_container(soup):
     return body, ["no-semantic-container"]
 
 
+# 有结构意义的元素：容器里若找不到它们，就整体视为一个文本块。
+_STRUCTURE_TAGS = frozenset(_HEADING_TAGS) | _BLOCK_TAGS | {"table", "ul", "ol"}
+
+
 def _table_text(table) -> str:
     """把表格压成逐行文本：单元格用 “ | ” 连接，行间换行。"""
 
@@ -186,6 +190,12 @@ def extract_blocks(html: str) -> tuple[list[tuple[str, tuple[str, ...]]], list[s
                     emit(item, tuple(stack))
                 continue
             if name in _BLOCK_TAGS:
+                emit(_collapse(child.get_text(" ", strip=True)), tuple(stack))
+                continue
+            # 普通容器（div/span/section…）：没有结构子元素时整体作为文本块，
+            # 否则深入。很多站点（尤其 JS 渲染的 SPA）把正文放在 span/div 里
+            # 而不是 <p> 里，这一步保证这类内容不被丢掉。
+            if child.find(list(_STRUCTURE_TAGS)) is None:
                 emit(_collapse(child.get_text(" ", strip=True)), tuple(stack))
                 continue
             walk(child, stack)

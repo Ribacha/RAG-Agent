@@ -23,6 +23,9 @@ ocr = ["Pillow>=10.0", "pytesseract>=0.3.13"]
 llm = ["openai>=1.0.0", "socksio>=1.0.0"]
 # 网页抓取（ingest-url）。BeautifulSoup 用标准库 html.parser，无需额外编译。
 web = ["beautifulsoup4>=4.12"]
+# JS 动态渲染（ingest-url --render-js）。还需要一次性下载浏览器：
+# python -m playwright install chromium。体积较大，刻意不进 all。
+web-js = ["playwright>=1.40"]
 # LangGraph is optional: the hand-written runtime remains available for
 # offline installs and for comparing the graph's behavior with the baseline.
 graph = ["langgraph>=0.2.0"]
