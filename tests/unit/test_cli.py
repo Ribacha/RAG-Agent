@@ -44,6 +44,7 @@ class CliTests(unittest.TestCase):
             output = root / "out" / "chunks.jsonl"
             manifest = root / "out" / "documents.jsonl"
             failures = root / "out" / "failures.jsonl"
+            index = root / "out" / "vectors.jsonl"
 
             exit_code = main(
                 [
@@ -55,6 +56,8 @@ class CliTests(unittest.TestCase):
                     str(manifest),
                     "--failures",
                     str(failures),
+                    "--index",
+                    str(index),
                 ]
             )
 
