@@ -18,6 +18,7 @@ from .answering import OpenAICompatibleChatProvider, RagAnswerer
 from .chunking.splitter import ChunkConfig, chunk_document
 from .embeddings import create_embedding_provider
 from .evaluation import evaluate, load_evaluation_samples
+from .harness.runner import HarnessOptions, run_harness
 from .ingest.pdf import PdfOptions
 from .ingest.incremental import incremental_ingest
 from .ingest.pipeline import ingest_path
@@ -481,6 +482,53 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate_command.add_argument("--json", action="store_true", dest="as_json")
     _add_embedding_arguments(evaluate_command)
     evaluate_command.set_defaults(handler=_handle_evaluate)
+
+    harness_command = commands.add_parser(
+        "harness",
+        help="维护·评测：题库批量评测 Agent（fake 免费 / real 真实质量）",
+    )
+    harness_command.add_argument(
+        "tasks_file", type=Path, help="题库 JSONL（generate_seed_tasks.py 可生成种子）"
+    )
+    harness_command.add_argument(
+        "--index",
+        type=Path,
+        default=DEFAULT_INDEX,
+        help=f"向量索引路径（默认：{DEFAULT_INDEX}）",
+    )
+    harness_command.add_argument(
+        "--real",
+        action="store_true",
+        help="真实模型评测（消费 API Key）；默认 fake 模式（免费，验证机制）",
+    )
+    harness_command.add_argument(
+        "--repeat", type=int, default=1, help="整套重跑次数（>1 时输出抖动统计）"
+    )
+    harness_command.add_argument("--limit", type=int, default=None, help="只跑前 N 题")
+    harness_command.add_argument(
+        "--compare",
+        type=Path,
+        default=None,
+        help="旧报告路径：输出新旧指标 diff 与拒答翻转",
+    )
+    harness_command.add_argument(
+        "--report-dir",
+        type=Path,
+        default=None,
+        help="报告输出目录（默认：工作区 data/eval/reports/）",
+    )
+    harness_command.add_argument("--json", action="store_true", dest="as_json")
+    harness_command.add_argument(
+        "--llm-api-key", "--chat-api-key", dest="llm_api_key", default=None
+    )
+    harness_command.add_argument(
+        "--llm-base-url", "--chat-base-url", dest="llm_base_url", default=None
+    )
+    harness_command.add_argument(
+        "--llm-model", "--chat-model", dest="llm_model", default=None
+    )
+    harness_command.add_argument("--max-tokens", type=int, default=1200)
+    harness_command.set_defaults(handler=_handle_harness)
 
     list_documents = commands.add_parser(
         "list-documents",
@@ -1094,6 +1142,64 @@ def _handle_evaluate(args: argparse.Namespace) -> int:
                 f"citation={sample.citation_accuracy:.4f}, "
                 f"retrieved={len(sample.retrieved)}"
             )
+    return 0
+
+
+def _handle_harness(args: argparse.Namespace) -> int:
+    chat_factory = None
+    if args.real:
+        def chat_factory():  # noqa: E306 - real 模式的模型工厂
+            return OpenAICompatibleChatProvider.from_environment(
+                api_key=args.llm_api_key,
+                base_url=args.llm_base_url,
+                model=args.llm_model,
+                max_tokens=args.max_tokens,
+            )
+    options = HarnessOptions(
+        tasks_path=_resolve_path(args.tasks_file),
+        index_path=_resolve_path(args.index),
+        mode="real" if args.real else "fake",
+        repeat=args.repeat,
+        limit=args.limit,
+        report_dir=_resolve_path(args.report_dir) if args.report_dir else None,
+        compare_path=_resolve_path(args.compare) if args.compare else None,
+    )
+    report = run_harness(options, chat_factory=chat_factory)
+    if args.as_json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+    aggregate = report["aggregate"]
+    overall = aggregate["overall"]
+    print(f"模式：{report['mode']}（模型 {report['model']}）| 题数 {report['task_count']} | repeat {report['repeat']}")
+    answerable = aggregate["by_type"]["answerable"]
+    refusal = aggregate["by_type"]["refusal"]
+    if answerable.get("count"):
+        print(
+            f"answerable：检索命中 {answerable['retrieval_hit_rate']} | "
+            f"拒答正确 {answerable['refusal_correct_rate']} | "
+            f"引用 OK {answerable['citation_ok_rate']}"
+        )
+    if refusal.get("count"):
+        print(f"refusal 陷阱题：拒答正确 {refusal['refusal_correct_rate']}")
+    print(
+        f"整体：平均工具调用 {overall['avg_tool_calls']} | "
+        f"零引用 {overall['citation_uncited']} | 引用越界 {overall['citation_invalid']}"
+    )
+    if report.get("jitter"):
+        jitter = report["jitter"]
+        print(
+            f"抖动：拒答正确率 {jitter['refusal_correct_rate']} | "
+            f"拒答翻转 {jitter['refusal_flip_count']} 题"
+        )
+    print(f"报告：{report['report_path']}")
+    if report.get("compare"):
+        compare = report["compare"]
+        print(f"对比旧报告（{compare.get('old_created_at', '?')}）：")
+        for key, delta in compare.get("metric_deltas", {}).items():
+            print(f"  {key}: {delta['old']} -> {delta['new']}")
+        flips = compare.get("refusal_flips_between_runs", [])
+        if flips:
+            print(f"  拒答翻转题：{', '.join(flips)}")
     return 0
 
 

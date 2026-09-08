@@ -17,6 +17,12 @@ from .metrics import (
     evaluate_task,
     refusal_detected,
 )
+from .runner import (
+    HarnessOptions,
+    IdealScriptChat,
+    compare_reports,
+    run_harness,
+)
 
 __all__ = [
     "TASKS_SCHEMA_VERSION",
@@ -27,4 +33,8 @@ __all__ = [
     "evaluate_task",
     "aggregate_metrics",
     "refusal_detected",
+    "HarnessOptions",
+    "IdealScriptChat",
+    "run_harness",
+    "compare_reports",
 ]
