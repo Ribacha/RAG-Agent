@@ -152,26 +152,29 @@ python -m rag_agent ask "你的问题" --dry-run
 
 ## 命令选择
 
-| 命令 | 用途 | 是否调用 DeepSeek |
-| --- | --- | --- |
-| `init` | 初始化工作区：创建 data/ 目录并生成 .env | 否 |
-| `doctor` | 检查工作区、配置和可选依赖 | 否 |
-| `ingest` | 抽取资料、分块并建立索引 | 否 |
-| `ingest-url` | 爬取网站文字内容，清洗整理后导入索引 | 否 |
-| `search` | 只检索 Top-K 证据 | 否 |
-| `ask` | Python 先检索，再让模型回答 | 是（`--dry-run` 除外） |
-| `chat` | 交互式问答会话，支持续问 | 是（`--retrieval-only` / `--dry-run` 除外） |
-| `agent` | 让模型自主决定何时调用受控检索工具 | 是 |
-| `evaluate` | 用 JSONL 标注集评测 Recall@K | 否 |
-| `list-documents` | 查看最近一次导入清单 | 否 |
-| `rebuild-index` | 用已有 chunks 重新建立索引 | 否 |
-| `version` | 打印版本号 | 否 |
+应用层两个核心入口：**`ask`（简单 RAG）** 与 **`agent`（完全体：本地知识库优先，
+证据不足时自主上网核实）**；其余命令是维护工具。
 
-第一次使用建议按 `ingest -> search -> ask` 顺序执行。`agent` 是需要模型工具调用能力
-的高级模式，确认普通 `ask` 正常后再使用：
+| 命令 | 定位 | 用途 | 是否调用 DeepSeek |
+| --- | --- | --- | --- |
+| `ask` | 核心入口 | 检索本地知识库并生成带引用的回答 | 是（`--dry-run` 除外） |
+| `agent` | 核心入口 | 完全体：本地优先检索，证据不足时自主上网爬取核实 | 是 |
+| `chat` | 交互外壳 | 会话式使用上面两种模式（`--agent` 切完全体） | 是（`--retrieval-only` 除外） |
+| `ingest` | 维护 | 抽取资料、分块并建立索引 | 否 |
+| `ingest-url` | 维护 | 爬取网站文字内容，清洗整理后导入索引 | 否 |
+| `search` | 维护 | 只检索 Top-K 证据 | 否 |
+| `evaluate` | 维护 | 用 JSONL 标注集评测 Recall@K | 否 |
+| `list-documents` | 维护 | 查看最近一次导入清单 | 否 |
+| `rebuild-index` | 维护 | 用已有 chunks 重新建立索引 | 否 |
+| `init` / `doctor` / `version` | 维护 | 初始化工作区 / 自检 / 版本 | 否 |
+
+第一次使用建议按 `ingest -> search -> ask` 顺序执行。完全体 `agent` 的工作流
+（规划 → 本地优先 → 充分性评估 → 网络兜底 → 交叉验证）见
+[docs/Agent工作流工程文档.md](docs/Agent工作流工程文档.md)：
 
 ```bash
 python -m rag_agent agent "Transformer 的注意力如何计算" --json
+python -m rag_agent agent "这个问题我的知识库可能没有" --no-web   # 逃生：禁用上网
 ```
 
 ## 抓取网站内容
@@ -259,7 +262,9 @@ python -m pip install -r requirements-ocr.txt
 
 ## 对话历史和 Agent
 
-`agent` 可以把已完成的问答轮次保存为 JSONL，并在下一次命令中继续追问：
+完全体 `agent` 默认启用网络兜底（`--max-steps` 默认 8；`--no-web` 关闭后退回
+仅本地行为，轮数默认 5）。它可以把已完成的问答轮次保存为 JSONL，并在下一次
+命令中继续追问：
 
 ```bash
 python -m rag_agent agent "Transformer 的注意力如何计算" \

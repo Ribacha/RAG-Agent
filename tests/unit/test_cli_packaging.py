@@ -246,5 +246,56 @@ class ChatCommandTests(unittest.TestCase):
             self.assertEqual(history["turns"][-1]["user"], "第一问")
 
 
+class AgentWebToggleTests(unittest.TestCase):
+    """agent 命令默认启用网络兜底；--no-web 关闭后与旧版一致。"""
+
+    def _run_agent(self, argv_extra: list[str]) -> dict:
+        class ImmediateAnswerChat:
+            model = "fake"
+
+            def complete_with_tools(self, messages, tools):
+                from rag_agent.answering.chat import ToolChatTurn
+
+                return ToolChatTurn(
+                    content="直接回答 [1]。",
+                    tool_calls=(),
+                    assistant_message={"role": "assistant", "content": "直接回答 [1]。"},
+                )
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        index_path = Path(directory.name) / "vectors.jsonl"
+        build_vector_index(
+            [{
+                "chunk_id": "one", "doc_id": "d",
+                "source_path": "/docs/a.md", "file_type": "markdown",
+                "text": "测试片段。",
+            }],
+            provider=HashEmbeddingProvider(dimension=64),
+            path=index_path,
+        )
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), patch(
+            "rag_agent.cli.OpenAICompatibleChatProvider.from_environment",
+            return_value=ImmediateAnswerChat(),
+        ):
+            exit_code = main(
+                ["agent", "测试问题", "--index", str(index_path),
+                 "--embedding-dimension", "64", "--llm-api-key", "test-key",
+                 "--json", *argv_extra]
+            )
+        self.assertEqual(exit_code, 0)
+        return json.loads(output.getvalue())
+
+    def test_web_tool_enabled_by_default_and_disabled_by_flag(self) -> None:
+        default_payload = self._run_agent([])
+        self.assertTrue(default_payload["web_tool_enabled"])
+        offline_payload = self._run_agent(["--no-web"])
+        self.assertFalse(offline_payload["web_tool_enabled"])
+        # 两份输出的其余契约一致
+        self.assertEqual(default_payload["question"], offline_payload["question"])
+        self.assertEqual(default_payload["stopped_reason"], "completed")
+
+
 if __name__ == "__main__":
     unittest.main()

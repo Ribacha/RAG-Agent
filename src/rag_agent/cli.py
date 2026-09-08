@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import sys
 
-from .agent import ConversationHistory, KnowledgeSearchTool, run_knowledge_graph
+from .agent import ConversationHistory, KnowledgeSearchTool, WebFetchTool, run_knowledge_graph
 from .agent.runtime import KnowledgeAgent
 from .answering import OpenAICompatibleChatProvider, RagAnswerer
 from .chunking.splitter import ChunkConfig, chunk_document
@@ -75,7 +75,10 @@ DEFAULT_INDEX = PROJECT_ROOT / "data/index/vectors.jsonl"
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rag-agent",
-        description="分阶段 RAG Agent：导入、检索、离线评测和受控问答。",
+        description=(
+            "两个核心入口：ask（简单 RAG 问答）与 agent（完全体：本地知识库优先，"
+            "证据不足时自主上网核实）。其余命令（ingest/search/evaluate 等）为维护工具。"
+        ),
     )
     parser.add_argument(
         "--version",
@@ -83,6 +86,115 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"%(prog)s {__version__}",
     )
     commands = parser.add_subparsers(dest="command", required=True)
+
+    ask = commands.add_parser(
+        "ask",
+        help="核心入口·简单 RAG：检索知识库并生成带引用的回答",
+    )
+    ask.add_argument("question", help="要询问知识库的问题")
+    ask.add_argument(
+        "--index",
+        type=Path,
+        default=DEFAULT_INDEX,
+        help=f"向量索引路径（默认：{DEFAULT_INDEX}）",
+    )
+    ask.add_argument("--top-k", type=int, default=5)
+    ask.add_argument(
+        "--min-score",
+        type=float,
+        default=0.08,
+        help="最低余弦相似度；hash 基线可先从 0.08 调整",
+    )
+    ask.add_argument("--max-context-chars", type=int, default=8000)
+    ask.add_argument("--json", action="store_true", dest="as_json")
+    ask.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="只显示将发送给模型的证据，不调用聊天 API",
+    )
+    _add_embedding_arguments(ask)
+    ask.add_argument(
+        "--llm-api-key",
+        "--chat-api-key",
+        dest="llm_api_key",
+        default=None,
+        help="聊天模型 Key（也可设置 LLM_API_KEY）",
+    )
+    ask.add_argument(
+        "--llm-base-url",
+        "--chat-base-url",
+        dest="llm_base_url",
+        default=None,
+        help="聊天接口 Base URL（默认读取 LLM_BASE_URL）",
+    )
+    ask.add_argument(
+        "--llm-model",
+        "--chat-model",
+        dest="llm_model",
+        default=None,
+        help="聊天模型名称（默认读取 LLM_MODEL 或 deepseek-chat）",
+    )
+    ask.add_argument("--temperature", type=float, default=0.2)
+    ask.add_argument("--max-tokens", type=int, default=1200)
+    ask.set_defaults(handler=_handle_ask)
+
+    agent = commands.add_parser(
+        "agent",
+        help="核心入口·完全体：本地优先检索，证据不足时自主上网核实",
+    )
+    agent.add_argument("question", help="要询问知识库的问题")
+    agent.add_argument(
+        "--index",
+        type=Path,
+        default=DEFAULT_INDEX,
+        help=f"向量索引路径（默认：{DEFAULT_INDEX}）",
+    )
+    agent.add_argument("--embedding-provider", choices=["hash", "chinese", "openai"], default=None)
+    agent.add_argument("--embedding-dimension", type=int, default=None)
+    agent.add_argument("--embedding-model", default=None)
+    agent.add_argument("--embedding-api-key", default=None)
+    agent.add_argument("--embedding-base-url", default=None)
+    agent.add_argument("--llm-api-key", "--chat-api-key", dest="llm_api_key", default=None)
+    agent.add_argument("--llm-base-url", "--chat-base-url", dest="llm_base_url", default=None)
+    agent.add_argument("--llm-model", "--chat-model", dest="llm_model", default=None)
+    agent.add_argument("--temperature", type=float, default=0.2)
+    agent.add_argument("--max-tokens", type=int, default=1200)
+    agent.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="最大工具调用轮数（默认：启用网络兜底 8，禁用时 5）",
+    )
+    agent.add_argument(
+        "--no-web",
+        action="store_true",
+        help="禁用网络兜底工具，只检索本地知识库（行为与旧版一致）",
+    )
+    agent.add_argument(
+        "--graph",
+        action="store_true",
+        help="使用可选的 LangGraph 状态图运行（未安装时明确报错）",
+    )
+    agent.add_argument(
+        "--history",
+        type=Path,
+        default=None,
+        help="读取并在本轮完成后更新 JSONL 对话历史",
+    )
+    agent.add_argument(
+        "--save-history",
+        type=Path,
+        default=None,
+        help="把更新后的对话历史写入指定 JSONL 路径（可不读取旧历史）",
+    )
+    agent.add_argument(
+        "--history-max-turns",
+        type=int,
+        default=20,
+        help="新建历史时最多保留的问答轮数（默认 20）",
+    )
+    agent.add_argument("--json", action="store_true", dest="as_json")
+    agent.set_defaults(handler=_handle_agent)
 
     init = commands.add_parser(
         "init",
@@ -164,9 +276,19 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument(
         "--agent",
         action="store_true",
-        help="使用 agent 工具调用模式回答（默认为单轮 RAG）",
+        help="切换为完全体 Agent 模式（本地优先检索 + 网络兜底）",
     )
-    chat.add_argument("--max-steps", type=int, default=5)
+    chat.add_argument(
+        "--no-web",
+        action="store_true",
+        help="在 agent 模式下禁用网络兜底工具（行为与旧版一致）",
+    )
+    chat.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="agent 模式最大工具调用轮数（默认：启用网络 8，禁用 5）",
+    )
     chat.add_argument(
         "--history",
         type=Path,
@@ -359,105 +481,6 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate_command.add_argument("--json", action="store_true", dest="as_json")
     _add_embedding_arguments(evaluate_command)
     evaluate_command.set_defaults(handler=_handle_evaluate)
-
-    ask = commands.add_parser(
-        "ask",
-        help="检索知识库并调用聊天模型生成带引用的回答",
-    )
-    ask.add_argument("question", help="要询问知识库的问题")
-    ask.add_argument(
-        "--index",
-        type=Path,
-        default=DEFAULT_INDEX,
-        help=f"向量索引路径（默认：{DEFAULT_INDEX}）",
-    )
-    ask.add_argument("--top-k", type=int, default=5)
-    ask.add_argument(
-        "--min-score",
-        type=float,
-        default=0.08,
-        help="最低余弦相似度；hash 基线可先从 0.08 调整",
-    )
-    ask.add_argument("--max-context-chars", type=int, default=8000)
-    ask.add_argument("--json", action="store_true", dest="as_json")
-    ask.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="只显示将发送给模型的证据，不调用聊天 API",
-    )
-    _add_embedding_arguments(ask)
-    ask.add_argument(
-        "--llm-api-key",
-        "--chat-api-key",
-        dest="llm_api_key",
-        default=None,
-        help="聊天模型 Key（也可设置 LLM_API_KEY）",
-    )
-    ask.add_argument(
-        "--llm-base-url",
-        "--chat-base-url",
-        dest="llm_base_url",
-        default=None,
-        help="聊天接口 Base URL（默认读取 LLM_BASE_URL）",
-    )
-    ask.add_argument(
-        "--llm-model",
-        "--chat-model",
-        dest="llm_model",
-        default=None,
-        help="聊天模型名称（默认读取 LLM_MODEL 或 deepseek-chat）",
-    )
-    ask.add_argument("--temperature", type=float, default=0.2)
-    ask.add_argument("--max-tokens", type=int, default=1200)
-    ask.set_defaults(handler=_handle_ask)
-
-    agent = commands.add_parser(
-        "agent",
-        help="让聊天模型通过受控检索工具自主完成知识库问答",
-    )
-    agent.add_argument("question", help="要询问知识库的问题")
-    agent.add_argument(
-        "--index",
-        type=Path,
-        default=DEFAULT_INDEX,
-        help=f"向量索引路径（默认：{DEFAULT_INDEX}）",
-    )
-    agent.add_argument("--embedding-provider", choices=["hash", "chinese", "openai"], default=None)
-    agent.add_argument("--embedding-dimension", type=int, default=None)
-    agent.add_argument("--embedding-model", default=None)
-    agent.add_argument("--embedding-api-key", default=None)
-    agent.add_argument("--embedding-base-url", default=None)
-    agent.add_argument("--llm-api-key", "--chat-api-key", dest="llm_api_key", default=None)
-    agent.add_argument("--llm-base-url", "--chat-base-url", dest="llm_base_url", default=None)
-    agent.add_argument("--llm-model", "--chat-model", dest="llm_model", default=None)
-    agent.add_argument("--temperature", type=float, default=0.2)
-    agent.add_argument("--max-tokens", type=int, default=1200)
-    agent.add_argument("--max-steps", type=int, default=5)
-    agent.add_argument(
-        "--graph",
-        action="store_true",
-        help="使用可选的 LangGraph 状态图运行（未安装时明确报错）",
-    )
-    agent.add_argument(
-        "--history",
-        type=Path,
-        default=None,
-        help="读取并在本轮完成后更新 JSONL 对话历史",
-    )
-    agent.add_argument(
-        "--save-history",
-        type=Path,
-        default=None,
-        help="把更新后的对话历史写入指定 JSONL 路径（可不读取旧历史）",
-    )
-    agent.add_argument(
-        "--history-max-turns",
-        type=int,
-        default=20,
-        help="新建历史时最多保留的问答轮数（默认 20）",
-    )
-    agent.add_argument("--json", action="store_true", dest="as_json")
-    agent.set_defaults(handler=_handle_agent)
 
     list_documents = commands.add_parser(
         "list-documents",
@@ -707,10 +730,15 @@ def _handle_chat(args: argparse.Namespace) -> int:
         )
     agent = None
     if args.agent and chat_provider is not None:
+        web_tool = None if args.no_web else WebFetchTool()
+        max_steps = args.max_steps
+        if max_steps is None:
+            max_steps = 8 if web_tool is not None else 5
         agent = KnowledgeAgent(
             KnowledgeSearchTool(index, embedding_provider),
             chat_provider,
-            max_steps=args.max_steps,
+            max_steps=max_steps,
+            web_tool=web_tool,
         )
     answerer = None
     if chat_provider is not None and not args.agent:
@@ -726,7 +754,15 @@ def _handle_chat(args: argparse.Namespace) -> int:
     mode = (
         "离线检索（--retrieval-only）"
         if args.retrieval_only
-        else ("agent 工具调用" if args.agent else "单轮 RAG")
+        else (
+            (
+                "完全体 Agent（网络兜底启用）"
+                if not args.no_web
+                else "完全体 Agent（--no-web 仅本地）"
+            )
+            if args.agent
+            else "单轮 RAG"
+        )
     )
     print(f"rag-agent chat（{mode}）| 索引 {index.size} 条 | 输入 exit 退出，/help 查看命令。")
     while True:
@@ -784,6 +820,15 @@ def _handle_chat(args: argparse.Namespace) -> int:
                 print(result.answer)
                 if result.evidence:
                     print(f"\nAgent 检索到 {len(result.evidence)} 条证据。")
+                    for number, evidence in enumerate(result.evidence, start=1):
+                        location = str(evidence.get("source_path", ""))
+                        if evidence.get("page_start") is not None:
+                            location += f"，第 {evidence['page_start']} 页"
+                        if evidence.get("heading_path"):
+                            location += "，章节：" + " / ".join(evidence["heading_path"])
+                        source_kind = evidence.get("source_type", "local")
+                        location += "（本地）" if source_kind == "local" else "（网络）"
+                        print(f"[{number}] {location}")
             else:
                 assert answerer is not None
                 result = answerer.answer(line)
@@ -1105,10 +1150,16 @@ def _handle_agent(args: argparse.Namespace) -> int:
         temperature=args.temperature,
         max_tokens=args.max_tokens,
     )
+    # 完全体模式默认启用网络兜底；--no-web 逃生后与旧版行为一致。
+    web_tool = None if args.no_web else WebFetchTool()
+    max_steps = args.max_steps
+    if max_steps is None:
+        max_steps = 8 if web_tool is not None else 5
     agent = KnowledgeAgent(
         KnowledgeSearchTool(index, embedding_provider),
         chat_provider,
-        max_steps=args.max_steps,
+        max_steps=max_steps,
+        web_tool=web_tool,
     )
     history = ConversationHistory(max_turns=args.history_max_turns)
     if args.history is not None:
@@ -1125,7 +1176,9 @@ def _handle_agent(args: argparse.Namespace) -> int:
         history_path = _resolve_path(history_output)
         result.history.save(history_path)
     if args.as_json:
-        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+        payload = result.to_dict()
+        payload["web_tool_enabled"] = agent.web_tool is not None
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         print(result.answer)
         if result.evidence:
@@ -1136,7 +1189,11 @@ def _handle_agent(args: argparse.Namespace) -> int:
                     location += f"，第 {evidence['page_start']} 页"
                 if evidence.get("heading_path"):
                     location += "，章节：" + " / ".join(evidence["heading_path"])
+                source_kind = evidence.get("source_type", "local")
+                location += "（本地）" if source_kind == "local" else "（网络）"
                 print(f"[{number}] {location} | chunk_id={evidence.get('chunk_id', '')}")
+        mode = "完全体（网络兜底启用）" if agent.web_tool is not None else "仅本地（--no-web）"
+        print(f"\n模式：{mode}，工具调用 {len(result.tool_calls)} 次。")
         if history_output is not None:
             print(f"\n对话历史已写入：{_resolve_path(history_output)}")
     return 0 if result.stopped_reason == "completed" else 2

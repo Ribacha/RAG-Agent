@@ -104,9 +104,9 @@ class NullSearchProvider:
 | --- | --- | --- | --- | --- |
 | M0 | 工程文档 | 本文档 | ✅ 完成 | 494fba1 |
 | M1 | 网络工具层 | `agent/web_tool.py`（WebFetchTool 全护栏）+ SearchProvider/NullProvider + 单测 | ✅ 完成 | aca5cb3 |
-| M2 | 运行时多工具化 | KnowledgeAgent 双工具 + 共享 dispatch（手写/LangGraph 同源）+ 工作流引导版系统提示 + 测试 | ✅ 完成 | 本提交（哈希在 M3 回填） |
-| M3 | 工作流端到端验证 | 四路径离线剧本测试：本地足够→不上网 / 本地不足→多跳 / 空索引→直接网络 / 双双不足→拒答 | ⬜ 未开始 | - |
-| M4 | 应用层收敛 | CLI help 双入口分组、agent 默认启用 web（`--no-web` 逃生）、README/使用指南重构、chat 外壳对齐 | ⬜ 未开始 | - |
+| M2 | 运行时多工具化 | KnowledgeAgent 双工具 + 共享 dispatch（手写/LangGraph 同源）+ 工作流引导版系统提示 + 测试 | ✅ 完成 | 40e4e28 |
+| M3 | 工作流端到端验证 | 四路径离线剧本测试：本地足够→不上网 / 本地不足→多跳 / 空索引→直接网络 / 双双不足→拒答 | ✅ 完成 | 25d8bf9 |
+| M4 | 应用层收敛 | CLI help 双入口分组、agent 默认启用 web（`--no-web` 逃生）、README/使用指南重构、chat 外壳对齐 | ✅ 完成 | 本提交（哈希在 M5 回填） |
 | M5 | 收尾 | 真实网络冒烟（可选）、优化文档登记（OPT-17 部分落地）、进度收尾 | ⬜ 未开始 | - |
 
 ## 8. 明确不做（本轮范围外）
