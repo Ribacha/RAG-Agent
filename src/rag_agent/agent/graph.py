@@ -17,8 +17,13 @@ import json
 from typing import Any, Mapping, TypedDict
 
 from .history import ConversationHistory
-from .knowledge_tool import SEARCH_KNOWLEDGE_TOOL
-from .runtime import AgentResult, AgentState, KnowledgeAgent
+from .runtime import (
+    AgentResult,
+    AgentState,
+    KnowledgeAgent,
+    collect_evidence,
+    dispatch_tool,
+)
 
 
 GRAPH_AGENT_NODE = "agent"
@@ -104,7 +109,7 @@ def agent_model_node(agent: KnowledgeAgent, state: Mapping[str, Any]) -> GraphSt
             "step": step,
         }
 
-    turn = agent.chat_provider.complete_with_tools(messages, [SEARCH_KNOWLEDGE_TOOL])
+    turn = agent.chat_provider.complete_with_tools(messages, agent.tool_schemas())
     messages.append(deepcopy(turn.assistant_message))
     next_step = step + 1
     pending = [
@@ -134,7 +139,7 @@ def agent_model_node(agent: KnowledgeAgent, state: Mapping[str, Any]) -> GraphSt
 
 
 def agent_tools_node(agent: KnowledgeAgent, state: Mapping[str, Any]) -> GraphState:
-    """Execute pending calls through the same read-only tool boundary."""
+    """Execute pending calls through the shared, read-only tool boundary."""
 
     messages = _messages(state)
     calls_audit = _dict_list(state.get("tool_calls"))
@@ -148,28 +153,18 @@ def agent_tools_node(agent: KnowledgeAgent, state: Mapping[str, Any]) -> GraphSt
         arguments = call.get("arguments", "")
         call_id = call_id if isinstance(call_id, str) else str(call_id)
         name = name if isinstance(name, str) else str(name)
+        # 与手写运行时共用同一 dispatch/归集函数：白名单、参数校验、错误
+        # 转证据与 source_type 标注在两条执行路径上行为完全一致。
+        output = dispatch_tool(agent, name, arguments)
         audit: dict[str, Any] = {
             "step": step,
             "call_id": call_id,
             "name": name,
             "arguments": arguments,
+            "result": output,
         }
-        if name != SEARCH_KNOWLEDGE_TOOL["name"]:
-            output: dict[str, Any] = {"error": f"不允许的工具：{name}"}
-        elif not isinstance(arguments, str):
-            output = {"error": "工具参数必须是 JSON 字符串"}
-        else:
-            try:
-                output_text = agent.tool.invoke_json(arguments)
-                output_value = json.loads(output_text)
-                output = output_value if isinstance(output_value, dict) else {"error": "工具返回格式无效"}
-            except Exception as error:  # Validation/provider errors remain auditable evidence.
-                output = {"error": str(error)}
-        audit["result"] = output
         calls_audit.append(audit)
-        for result in output.get("results", []) or []:
-            if isinstance(result, dict):
-                evidence.append(deepcopy(result))
+        collect_evidence(output, evidence)
         messages.append(
             {
                 "role": "tool",

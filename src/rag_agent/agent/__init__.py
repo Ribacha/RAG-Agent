@@ -18,7 +18,15 @@ from .history import (
     ConversationHistory,
     ConversationTurn,
 )
-from .runtime import AgentResult, AgentState, KnowledgeAgent
+from .runtime import (
+    AGENT_SYSTEM_PROMPT,
+    FULL_AGENT_SYSTEM_PROMPT,
+    AgentResult,
+    AgentState,
+    KnowledgeAgent,
+    build_system_prompt,
+    dispatch_tool,
+)
 from .graph import (
     GRAPH_AGENT_NODE,
     GRAPH_FINALIZE_NODE,
@@ -53,6 +61,10 @@ __all__ = [
     "AgentResult",
     "AgentState",
     "KnowledgeAgent",
+    "AGENT_SYSTEM_PROMPT",
+    "FULL_AGENT_SYSTEM_PROMPT",
+    "build_system_prompt",
+    "dispatch_tool",
     "GraphState",
     "GraphUnavailableError",
     "GRAPH_AGENT_NODE",
