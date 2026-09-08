@@ -106,8 +106,8 @@ class NullSearchProvider:
 | M1 | 网络工具层 | `agent/web_tool.py`（WebFetchTool 全护栏）+ SearchProvider/NullProvider + 单测 | ✅ 完成 | aca5cb3 |
 | M2 | 运行时多工具化 | KnowledgeAgent 双工具 + 共享 dispatch（手写/LangGraph 同源）+ 工作流引导版系统提示 + 测试 | ✅ 完成 | 40e4e28 |
 | M3 | 工作流端到端验证 | 四路径离线剧本测试：本地足够→不上网 / 本地不足→多跳 / 空索引→直接网络 / 双双不足→拒答 | ✅ 完成 | 25d8bf9 |
-| M4 | 应用层收敛 | CLI help 双入口分组、agent 默认启用 web（`--no-web` 逃生）、README/使用指南重构、chat 外壳对齐 | ✅ 完成 | 本提交（哈希在 M5 回填） |
-| M5 | 收尾 | 真实网络冒烟（可选）、优化文档登记（OPT-17 部分落地）、进度收尾 | ⬜ 未开始 | - |
+| M4 | 应用层收敛 | CLI help 双入口分组、agent 默认启用 web（`--no-web` 逃生）、README/使用指南重构、chat 外壳对齐 | ✅ 完成 | 6855b7a（+129f29c 清理） |
+| M5 | 收尾 | 真实网络冒烟（可选）、优化文档登记（OPT-17 部分落地）、进度收尾 | ✅ 完成 | 本提交 |
 
 ## 8. 明确不做（本轮范围外）
 
@@ -115,10 +115,14 @@ class NullSearchProvider:
 - iOS 仓库（rag-agent-ios）不同步——Swift 版是独立移植，后续单独计划；
 - 不删除任何维护命令；不改索引/分块/embedding 层（本改造全部在 agent 层）。
 
-## 9. 验收标准
+## 9. 验收标准（M5 核对）
 
-1. 全量 pytest 绿（现有 84 个 + 新增，全部离线）；
-2. 四条工作流路径各有离线剧本测试锁定行为；
-3. `agent` 命令真实运行：本地有问题时不上网；本地没有时能抓取公开文档站并给出带 URL 引用的回答；
-4. 审计完整：`--json` 输出可还原每一步工具调用与来源；
-5. `--no-web` 时行为与改造前一致（逃生开关有效）。
+1. ✅ 全量 pytest 绿：107 个测试（改造前 84 个 + 新增 23 个），全部离线；
+2. ✅ 四条工作流路径各有离线剧本测试锁定（`tests/unit/test_full_agent_workflow.py`）；
+3. ✅ 真实运行验证（2026-09，deepseek-chat）：问计网知识库没有的问题
+   （functools.lru_cache），审计显示 step1 本地检索两次（含改写重查）→
+   step2 模型自选 docs.python.org 抓取 → 回答带 URL 引用并说明"本地无关、
+   依据官方文档"；本地有问题时不上网由路径 1 测试锁定；
+4. ✅ 审计完整：`--json` 输出含 `web_tool_enabled`、逐次工具调用与
+   `source_type` 标注；
+5. ✅ `--no-web` 行为与改造前一致（CLI 测试锁定默认开/关两态）。
