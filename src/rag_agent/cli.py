@@ -517,6 +517,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="报告输出目录（默认：工作区 data/eval/reports/）",
     )
+    harness_command.add_argument(
+        "--no-judge",
+        action="store_true",
+        help="real 模式跳过 LLM 裁判（只出确定性指标）",
+    )
+    harness_command.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="先跑裁判校准（内置人工基准），结果并入报告",
+    )
     harness_command.add_argument("--json", action="store_true", dest="as_json")
     harness_command.add_argument(
         "--llm-api-key", "--chat-api-key", dest="llm_api_key", default=None
@@ -1147,7 +1157,9 @@ def _handle_evaluate(args: argparse.Namespace) -> int:
 
 def _handle_harness(args: argparse.Namespace) -> int:
     chat_factory = None
+    judge_factory = None
     if args.real:
+
         def chat_factory():  # noqa: E306 - real 模式的模型工厂
             return OpenAICompatibleChatProvider.from_environment(
                 api_key=args.llm_api_key,
@@ -1155,6 +1167,11 @@ def _handle_harness(args: argparse.Namespace) -> int:
                 model=args.llm_model,
                 max_tokens=args.max_tokens,
             )
+
+        if not args.no_judge:
+            from .harness.judge import create_judge_provider
+
+            judge_factory = create_judge_provider
     options = HarnessOptions(
         tasks_path=_resolve_path(args.tasks_file),
         index_path=_resolve_path(args.index),
@@ -1164,7 +1181,12 @@ def _handle_harness(args: argparse.Namespace) -> int:
         report_dir=_resolve_path(args.report_dir) if args.report_dir else None,
         compare_path=_resolve_path(args.compare) if args.compare else None,
     )
-    report = run_harness(options, chat_factory=chat_factory)
+    report = run_harness(
+        options,
+        chat_factory=chat_factory,
+        judge_factory=judge_factory,
+        calibrate=args.calibrate and judge_factory is not None,
+    )
     if args.as_json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
@@ -1191,6 +1213,32 @@ def _handle_harness(args: argparse.Namespace) -> int:
             f"抖动：拒答正确率 {jitter['refusal_correct_rate']} | "
             f"拒答翻转 {jitter['refusal_flip_count']} 题"
         )
+    if report.get("judge_summary"):
+        summary = report["judge_summary"]
+        print(
+            f"裁判：overall {summary['overall_mean']} | 忠实 {summary['faithfulness_mean']}"
+            f" | 覆盖 {summary['coverage_mean']} | 判决错误 {summary['judge_error_count']}"
+        )
+        counts = summary["failure_type_counts"]
+        print(
+            "失败分类：" + " | ".join(f"{kind} {count}" for kind, count in counts.items())
+        )
+    if report.get("cross_attribution"):
+        attribution = report["cross_attribution"]
+        print(
+            f"归因：生成端 {attribution['generation_side_failures']} | "
+            f"检索端 {attribution['retrieval_side_failures']} | "
+            f"自行补全待抽查 {attribution['suspicious_self_answers']}"
+        )
+    if report.get("judge_calibration"):
+        calibration = report["judge_calibration"]
+        line = (
+            f"校准：平均偏差 {calibration['mean_overall_delta']} | "
+            f"分类不一致 {calibration['type_mismatch_count']}"
+        )
+        if calibration["warning"]:
+            line += f" ⚠️ {calibration['warning_reason']}"
+        print(line)
     print(f"报告：{report['report_path']}")
     if report.get("compare"):
         compare = report["compare"]

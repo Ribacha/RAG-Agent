@@ -116,8 +116,14 @@ def run_harness(
     options: HarnessOptions,
     *,
     chat_factory: Callable[[], Any] | None = None,
+    judge_factory: Callable[[], Any] | None = None,
+    calibrate: bool = False,
 ) -> dict[str, Any]:
-    """执行一次评测并返回完整报告（同时落盘）。"""
+    """执行一次评测并返回完整报告（同时落盘）。
+
+    ``judge_factory`` 提供时对每题跑裁判（real 模式的质量层；fake 模式
+    也可注入假裁判用于离线验证管线）。``calibrate`` 额外执行裁判校准。
+    """
 
     tasks = load_tasks(options.tasks_path)
     if options.limit is not None:
@@ -159,6 +165,19 @@ def run_harness(
         per_run_rows.append(rows)
 
     final_rows = per_run_rows[-1]
+    judged_rows: list[dict[str, Any]] = []
+    if judge_factory is not None:
+        from .judge import JudgeError, judge_task  # 延迟导入保持 fake 路径零依赖
+
+        judge_chat = judge_factory()
+        for task, _metric, payload in final_rows:
+            try:
+                judged_rows.append(judge_task(task, payload, judge_chat).to_dict())
+            except JudgeError as error:
+                judged_rows.append({"error": str(error)})
+    else:
+        judged_rows = [None] * len(final_rows)
+
     report: dict[str, Any] = {
         "schema_version": HARNESS_REPORT_SCHEMA_VERSION,
         "mode": options.mode,
@@ -169,7 +188,9 @@ def run_harness(
         "tasks_fingerprint": sha256_bytes(options.tasks_path.read_bytes()),
         "aggregate": aggregate_metrics([(t, m) for t, m, _ in final_rows]),
         "jitter": None,
+        "judge_summary": None,
         "judge_calibration": None,
+        "cross_attribution": None,
         "tasks": [
             {
                 "task": task.to_dict(),
@@ -181,11 +202,20 @@ def run_harness(
                     "stopped_reason": payload.get("stopped_reason", ""),
                     "web_tool_enabled": payload.get("web_tool_enabled", False),
                 },
-                "judged": None,
+                "judged": judged,
             }
-            for task, metric, payload in final_rows
+            for (task, metric, payload), judged in zip(final_rows, judged_rows)
         ],
     }
+    if judge_factory is not None:
+        report["judge_summary"] = _judge_summary(judged_rows)
+        report["cross_attribution"] = _cross_attribution_safe(report["tasks"])
+    if calibrate:
+        if judge_factory is None:
+            raise ValueError("calibrate 需要 judge_factory")
+        from .judge import calibrate_judge
+
+        report["judge_calibration"] = calibrate_judge(judge_factory())
     if options.repeat > 1:
         report["jitter"] = _jitter_section(per_run_rows, tasks)
     report_path = _write_report(report, options.report_dir)
@@ -194,6 +224,36 @@ def run_harness(
         previous = json.loads(options.compare_path.read_text(encoding="utf-8"))
         report["compare"] = compare_reports(previous, report)
     return report
+
+
+def _judge_summary(judged_rows: Sequence[Any]) -> dict[str, Any]:
+    from .judge import FAILURE_TYPES
+
+    verdicts = [row for row in judged_rows if isinstance(row, dict) and "error" not in row]
+    errors = [row for row in judged_rows if isinstance(row, dict) and "error" in row]
+
+    def mean(field: str) -> float | None:
+        values = [v[field] for v in verdicts if isinstance(v.get(field), int)]
+        return round(sum(values) / len(values), 4) if values else None
+
+    type_counts = {kind: 0 for kind in FAILURE_TYPES}
+    for verdict in verdicts:
+        if verdict.get("failure_type") in type_counts:
+            type_counts[verdict["failure_type"]] += 1
+    return {
+        "judged_count": len(verdicts),
+        "judge_error_count": len(errors),
+        "overall_mean": mean("overall"),
+        "faithfulness_mean": mean("faithfulness"),
+        "coverage_mean": mean("coverage"),
+        "failure_type_counts": type_counts,
+    }
+
+
+def _cross_attribution_safe(task_rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    from .judge import cross_attribution
+
+    return cross_attribution(task_rows)
 
 
 def compare_reports(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
