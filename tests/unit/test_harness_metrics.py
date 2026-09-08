@@ -113,6 +113,31 @@ class MetricsTests(unittest.TestCase):
         self.assertFalse(refusal_detected("知识库中没有找到足够相关的资料。", 3))
         self.assertFalse(refusal_detected("答案是三次握手 [1]。", 1))
 
+    def test_broad_markers_apply_to_refusal_tasks_only(self) -> None:
+        # 真实运行发现的措辞：模型说"没有记录/不存在关于"也是正确拒答
+        from rag_agent.harness.metrics import _refusal_detected
+
+        self.assertTrue(_refusal_detected("资料中没有记录银行卡密码。", 0, broad=True))
+        self.assertTrue(
+            _refusal_detected("知识库中不存在关于火星改造的章节。", 2, broad=True)
+        )
+        self.assertTrue(_refusal_detected("没有提及作者生日。", 3, broad=True))
+        # 严格口径（answerable 分支）不受影响
+        self.assertFalse(_refusal_detected("资料中没有记录银行卡密码。", 0, broad=False))
+        self.assertFalse(_refusal_detected("不存在关于火星的章节。", 2, broad=False))
+
+    def test_refusal_task_with_broad_wording_now_passes(self) -> None:
+        result = make_result(
+            answer="这本资料中没有记录银行卡密码，无法回答。",
+            evidence=[{"chunk_id": "junk", "source_path": "/junk.md"}],
+            tool_calls=[
+                {"name": "search_knowledge_base", "result": {"results": [{"chunk_id": "junk"}]}}
+            ],
+        )
+        metric = evaluate_task(REFUSAL_TASK, result)
+        self.assertTrue(metric.refused)
+        self.assertTrue(metric.refusal_correct)
+
     def test_answerable_task_with_valid_citation(self) -> None:
         metric = evaluate_task(ANSWERABLE, make_result())
         self.assertTrue(metric.retrieval_hit)

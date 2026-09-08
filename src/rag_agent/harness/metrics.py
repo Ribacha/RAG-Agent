@@ -51,18 +51,38 @@ class DeterministicMetrics:
 
 
 def refusal_detected(answer: str, evidence_count: int) -> bool:
-    """判定一次回答是否属于拒答。
+    """判定一次回答是否属于拒答（严格口径，用于 answerable 题防误判）。
 
-    两种形态：标准拒答文案；或证据为空且回答明确说"没有找到"类内容
-    （模型自己的拒答措辞）。
+    两种形态：标准拒答文案；或证据为空且回答明确说"没有找到"类内容。
     """
 
+    return _refusal_detected(answer, evidence_count, broad=False)
+
+
+_NARROW_MARKERS = ("没有找到", "无相关", "无法找到", "未找到")
+# 真实运行发现模型拒答措辞多样（"没有记录""不存在关于……的章节"等），
+# 宽口径仅用于 refusal 题：该分支下误报方向是可接受的（宁可人工复核）。
+_BROAD_MARKERS = _NARROW_MARKERS + (
+    "没有记录",
+    "没有提及",
+    "未收录",
+    "不包含",
+    "不存在关于",
+    "没有关于",
+    "无法回答",
+    "没有足够",
+)
+
+
+def _refusal_detected(answer: str, evidence_count: int, *, broad: bool) -> bool:
     clean = (answer or "").strip()
     if clean == DEFAULT_NO_EVIDENCE.strip():
         return True
-    if evidence_count == 0 and any(
-        marker in clean for marker in ("没有找到", "无相关", "无法找到", "未找到")
-    ):
+    markers = _BROAD_MARKERS if broad else _NARROW_MARKERS
+    if broad:
+        # 宽口径不要求证据为空：陷阱题常带噪声命中，模型仍可正确拒答。
+        return any(marker in clean for marker in markers)
+    if evidence_count == 0 and any(marker in clean for marker in markers):
         return True
     return False
 
@@ -74,7 +94,13 @@ def evaluate_task(task: HarnessTask, result: Mapping[str, Any]) -> Deterministic
     evidence = [item for item in result.get("evidence", []) or [] if isinstance(item, dict)]
     tool_calls = [call for call in result.get("tool_calls", []) or [] if isinstance(call, dict)]
 
-    refused = refusal_detected(answer, len(evidence))
+    # refusal 题用宽口径识别拒答（真实运行证明模型措辞多样，且陷阱题常带
+    # 噪声证据）；answerable 题保持严格口径防止把正常回答误标为拒答。
+    refused = _refusal_detected(
+        answer,
+        len(evidence),
+        broad=task.task_type == "refusal",
+    )
     citation_status = _citation_status(answer, evidence_count=len(evidence), refused=refused)
     retrieval_hit = (
         _retrieval_hit(task, tool_calls) if task.relevant_chunk_ids or task.relevant_source_paths else None
