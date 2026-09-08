@@ -11,6 +11,8 @@
 
 > **日常使用看这里**：[docs/使用指南.md](docs/使用指南.md) —— 按场景组织的操作手册
 >（怎么提问、怎么加资料、哪些命令不花钱）。本 README 偏安装配置和完整参考。
+> 全部文档（功能设计、工程路线、评测、学习教程）的导航见 **[docs/README.md](docs/README.md)**。
+> iOS 客户端是独立仓库：[rag-agent-ios](https://github.com/Ribacha/rag-agent-ios)。
 
 ## 从底层学习本项目
 
