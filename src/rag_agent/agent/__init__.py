@@ -5,6 +5,13 @@ from .knowledge_tool import (
     KnowledgeSearchTool,
     KnowledgeToolError,
 )
+from .web_tool import (
+    FETCH_WEB_PAGE_TOOL,
+    NullSearchProvider,
+    SearchProvider,
+    WebFetchTool,
+    WebToolError,
+)
 from .history import (
     DEFAULT_MAX_TURNS,
     HISTORY_SCHEMA_VERSION,
@@ -34,6 +41,11 @@ __all__ = [
     "KnowledgeSearchTool",
     "KnowledgeToolError",
     "SEARCH_KNOWLEDGE_TOOL",
+    "WebFetchTool",
+    "WebToolError",
+    "FETCH_WEB_PAGE_TOOL",
+    "SearchProvider",
+    "NullSearchProvider",
     "ConversationHistory",
     "ConversationTurn",
     "DEFAULT_MAX_TURNS",
